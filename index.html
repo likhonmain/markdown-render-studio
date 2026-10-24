@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Markdown Render Studio — AI output to PDF & Word</title>
+    <meta name="description" content="Paste raw AI Markdown (bold, lists, tables, LaTeX math) and get a faithful render, paginated PDF export and Word copy." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233964fe'/%3E%3Cpath d='M7 22V10h3l3 4 3-4h3v12h-3v-7l-3 4-3-4v7zM22 17h3v-7h2v7h3l-4 5z' fill='white'/%3E%3C/svg%3E" />
+    <script type="module" crossorigin src="./assets/index-COctqUYT.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-B8DOk6o3.css">
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo">M↓</span>
+          <span class="brand-name">Markdown Render Studio</span>
+        </div>
+
+        <div class="tb-group" role="group" aria-label="Panels">
+          <button class="tb-btn toggle" id="btn-editor" title="Show / hide the Markdown editor (Ctrl+E)">
+            <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z M10 5v14" /></svg><span>Editor</span>
+          </button>
+        </div>
+
+        <div class="tb-group seg" role="group" aria-label="View">
+          <button class="seg-btn" id="view-pages" title="Paginated print preview (what the PDF will look like)">Pages</button>
+          <button class="seg-btn" id="view-flow" title="Continuous view that reflows to the window width">Flow</button>
+        </div>
+
+        <div class="tb-group zoom" role="group" aria-label="Zoom">
+          <button class="tb-btn icon" id="zoom-out" title="Zoom out (Ctrl −)"><svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg></button>
+          <select id="zoom-select" title="Zoom">
+            <option value="width">Fit width</option>
+            <option value="page">Fit page</option>
+            <option value="0.5">50%</option>
+            <option value="0.67">67%</option>
+            <option value="0.75">75%</option>
+            <option value="0.9">90%</option>
+            <option value="1">100%</option>
+            <option value="1.1">110%</option>
+            <option value="1.25">125%</option>
+            <option value="1.5">150%</option>
+            <option value="1.75">175%</option>
+            <option value="2">200%</option>
+            <option value="custom" hidden>—</option>
+          </select>
+          <button class="tb-btn icon" id="zoom-in" title="Zoom in (Ctrl +)"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14" /></svg></button>
+        </div>
+
+        <div class="spacer"></div>
+
+        <div class="tb-group actions">
+          <button class="tb-btn" id="btn-wordcopy" title="Copy the whole render for pasting into Word (keeps bold, lists, tables and editable equations)">
+            <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg><span>Word copy</span>
+          </button>
+          <button class="tb-btn" id="btn-docx" title="Download a native .docx (Word) file">
+            <svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z M14 3v6h6 M8 13l1.5 5 2.5-4 2.5 4 1.5-5" /></svg><span>.docx</span>
+          </button>
+          <button class="tb-btn primary" id="btn-pdf" title="Export PDF (Ctrl+P) — choose “Save as PDF” in the dialog">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14" /></svg><span>Export PDF</span>
+          </button>
+          <button class="tb-btn toggle" id="btn-setup" title="Page setup: paper, margins, fonts, tables">
+            <svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></svg><span>Page setup</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="editor-pane" id="editor-pane" aria-label="Markdown source">
+          <div class="pane-head">
+            <span class="pane-title">Markdown</span>
+            <div class="pane-actions">
+              <button class="mini-btn" id="btn-paste" title="Replace the editor contents with the clipboard text">Paste</button>
+              <button class="mini-btn" id="btn-open" title="Open a .md / .txt file">Open</button>
+              <button class="mini-btn" id="btn-sample" title="Load the sample document">Sample</button>
+              <button class="mini-btn" id="btn-clear" title="Clear the editor">Clear</button>
+              <input type="file" id="file-input" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
+            </div>
+          </div>
+          <textarea id="source" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Paste raw Markdown from Google AI Studio, ChatGPT, DeepSeek… (bold, lists, tables, $LaTeX$ and $$display math$$ are all supported)"></textarea>
+          <div class="pane-foot" id="editor-stats">0 words</div>
+        </section>
+
+        <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
+
+        <section class="preview-pane" aria-label="Rendered preview">
+          <div class="preview-scroll" id="preview-scroll">
+            <div class="preview-stage" id="stage"></div>
+          </div>
+          <div class="statusbar">
+            <span id="status-pages">—</span>
+            <span class="dot">·</span>
+            <span id="status-paper">—</span>
+            <span class="dot">·</span>
+            <span id="status-zoom">—</span>
+            <span class="spacer"></span>
+            <span id="status-msg"></span>
+          </div>
+        </section>
+
+        <aside class="setup-pane" id="setup-pane" aria-label="Page setup">
+          <div class="pane-head">
+            <span class="pane-title">Page setup</span>
+            <button class="mini-btn" id="btn-reset" title="Restore default settings">Reset</button>
+          </div>
+          <div class="setup-body">
+            <fieldset>
+              <legend>Paper</legend>
+              <div class="row">
+                <select id="paper">
+                  <option value="A4">A4 · 210 × 297 mm</option>
+                  <option value="Letter">Letter · 8.5 × 11 in</option>
+                  <option value="Legal">Legal · 8.5 × 14 in</option>
+                  <option value="A5">A5 · 148 × 210 mm</option>
+                  <option value="A3">A3 · 297 × 420 mm</option>
+                  <option value="Custom">Custom…</option>
+                </select>
+              </div>
+              <div class="row custom-size" id="custom-size">
+                <label>W <input type="number" id="custom-w" min="50" max="1000" step="1" /> mm</label>
+                <label>H <input type="number" id="custom-h" min="50" max="2000" step="1" /> mm</label>
+              </div>
+              <div class="seg small" role="group" aria-label="Orientation">
+                <button class="seg-btn" id="orient-portrait">Portrait</button>
+                <button class="seg-btn" id="orient-landscape">Landscape</button>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Margins <span class="unit">mm</span></legend>
+              <div class="chips" id="margin-presets"></div>
+              <div class="margin-box">
+                <div class="m-diagram" aria-hidden="true"><div class="m-inner" id="m-inner"></div></div>
+                <div class="m-fields">
+                  <label class="m-field"><span>Top</span><input type="range" id="m-top-r" min="0" max="60" step="0.5" /><input type="number" id="m-top" min="0" max="100" step="0.5" /></label>
+                  <label class="m-field"><span>Bottom</span><input type="range" id="m-bottom-r" min="0" max="60" step="0.5" /><input type="number" id="m-bottom" min="0" max="100" step="0.5" /></label>
+                  <label class="m-field"><span>Left</span><input type="range" id="m-left-r" min="0" max="60" step="0.5" /><input type="number" id="m-left" min="0" max="100" step="0.5" /></label>
+                  <label class="m-field"><span>Right</span><input type="range" id="m-right-r" min="0" max="60" step="0.5" /><input type="number" id="m-right" min="0" max="100" step="0.5" /></label>
+                </div>
+              </div>
+              <label class="check"><input type="checkbox" id="link-margins" /> Same on all sides</label>
+              <label class="check"><input type="checkbox" id="guides" /> Show margin guides</label>
+            </fieldset>
+
+            <fieldset>
+              <legend>Text</legend>
+              <label class="field">Font
+                <select id="font"></select>
+              </label>
+              <label class="field">Size <output id="font-size-out"></output>
+                <input type="range" id="font-size" min="9" max="22" step="0.5" />
+              </label>
+              <label class="field">Line spacing <output id="line-out"></output>
+                <input type="range" id="line-spacing" min="0.8" max="1.6" step="0.05" />
+              </label>
+            </fieldset>
+
+            <fieldset>
+              <legend>Tables &amp; equations</legend>
+              <div class="seg small" role="group" aria-label="Table style">
+                <button class="seg-btn" id="tables-minimal" title="DeepSeek Harness look: horizontal rules only">Minimal</button>
+                <button class="seg-btn" id="tables-grid" title="Full grid, like Word tables">Grid</button>
+              </div>
+              <label class="check"><input type="checkbox" id="fit-tables" /> Fit wide tables to the page</label>
+              <label class="check"><input type="checkbox" id="fit-math" /> Shrink wide equations to fit</label>
+            </fieldset>
+
+            <fieldset>
+              <legend>Pages</legend>
+              <label class="check"><input type="checkbox" id="page-numbers" /> Page numbers</label>
+              <p class="hint">Force a new page with a line containing <code>\newpage</code> or <code>&lt;!-- pagebreak --&gt;</code>.</p>
+            </fieldset>
+
+            <fieldset>
+              <legend>Flow view</legend>
+              <label class="check"><input type="checkbox" id="flow-full" /> Use full window width</label>
+            </fieldset>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <div id="measure" aria-hidden="true"></div>
+    <div id="print-root" aria-hidden="true"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <dialog id="pdf-dialog">
+      <form method="dialog">
+        <h2>Export PDF</h2>
+        <p>Your browser's print dialog will open with the pages exactly as previewed.</p>
+        <ol>
+          <li>Destination: <b>Save as PDF</b> (or <i>Microsoft Print to PDF</i>).</li>
+          <li>Margins: <b>Default</b> or <b>None</b> — the page margins are already built in.</li>
+          <li>Under <i>More settings</i>, tick <b>Background graphics</b> so table shading prints.</li>
+        </ol>
+        <label class="check"><input type="checkbox" id="pdf-dont-show" /> Don't show this again</label>
+        <div class="dialog-actions">
+          <button value="cancel" class="tb-btn">Cancel</button>
+          <button value="ok" class="tb-btn primary" id="pdf-go">Open print dialog</button>
+        </div>
+      </form>
+    </dialog>
+
+  </body>
+</html>
