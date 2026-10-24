@@ -241,9 +241,9 @@ dialog ol { padding-left: 20px; margin: 10px 0 14px; }
 .export-card.ok { border-color: #12b76a; background: #ecfdf3; }
 .export-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; padding: 4px 2px; }
 
-/* bottom tab bar */
+/* bottom tab bar — always visible on mobile */
 #app.mobile .bottom-nav {
-  display: flex; flex: none; background: var(--panel); border-top: 1px solid var(--line);
+  display: flex !important; flex: none; background: var(--panel); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom); z-index: 6;
 }
 .bottom-nav button {
@@ -253,8 +253,6 @@ dialog ol { padding-left: 20px; margin: 10px 0 14px; }
 }
 .bottom-nav button svg { width: 22px; height: 22px; }
 .bottom-nav button[aria-current="page"] { color: var(--accent); font-weight: 600; }
-/* hide the tab bar while typing so the keyboard leaves room for text */
-#app.mobile.typing .bottom-nav { display: none; }
 
 #app.mobile #toast { bottom: calc(72px + env(safe-area-inset-bottom)); }
 #app.mobile .preview-scroll { touch-action: pan-x pan-y; overscroll-behavior: contain; }

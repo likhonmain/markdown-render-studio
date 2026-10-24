@@ -670,7 +670,7 @@ function setSource(text: string): void {
 
 function initEditor(): void {
   const saved = localStorage.getItem(SOURCE_KEY);
-  source.value = saved ?? sampleMarkdown;
+  source.value = saved && saved !== sampleMarkdown ? saved : '';
   updateStats();
   source.addEventListener('input', onSourceChange);
   source.addEventListener('keydown', (e) => {
@@ -681,7 +681,10 @@ function initEditor(): void {
       onSourceChange();
     }
   });
-  $('btn-sample').addEventListener('click', () => setSource(sampleMarkdown));
+  $('btn-sample').addEventListener('click', () => {
+    setSource(sampleMarkdown);
+    toast('Sample loaded');
+  });
   $('btn-clear').addEventListener('click', () => {
     setSource('');
     source.focus();
@@ -885,10 +888,7 @@ function initMobile(): void {
   $('m-docx').addEventListener('click', () => void downloadDocx());
   $('m-wordcopy').addEventListener('click', () => void wordCopy());
   $('m-goto-setup').addEventListener('click', () => setTab('setup'));
-  // Hide the tab bar while the keyboard is up.
-  source.addEventListener('focus', () => app.classList.add('typing'));
-  source.addEventListener('blur', () => app.classList.remove('typing'));
-  // A fresh visit on a phone opens on the preview; an empty document opens the editor.
+  // A fresh visit on a phone opens on the editor when empty, or preview when text is saved.
   tab = source.value.trim() ? 'preview' : 'edit';
   // First visit on a phone: start in the readable Flow view (an explicit choice is kept).
   if (isMobile() && localStorage.getItem('mdstudio.settings.v1') === null) settings.view = 'flow';
