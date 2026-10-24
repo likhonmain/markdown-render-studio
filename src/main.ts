@@ -107,6 +107,14 @@ function fitContent(md: HTMLElement): void {
     // Narrowest width at which no word has to be broken.
     table.style.width = 'min-content';
     const minW = table.getBoundingClientRect().width;
+    // Phone flow view: a readable, horizontally scrollable table beats a squashed one.
+    const phoneFlow = isMobile() && settings.view === 'flow' && !md.closest('#measure');
+    if (phoneFlow && minW > avail * 1.15) {
+      table.style.width = `${Math.min(minW * 1.25, Math.max(avail * 1.6, minW))}px`;
+      wrap.classList.add('scroll-x');
+      continue;
+    }
+    wrap.classList.remove('scroll-x');
     if (minW > avail + 0.5) {
       // Scale down so whole words fit; below 55 % text gets unreadable, so stop
       // there and let over-long words wrap inside their cell instead.
@@ -151,14 +159,18 @@ function fitContent(md: HTMLElement): void {
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 
+function stagePad(): number {
+  return isMobile() ? 20 : 48;
+}
+
 function previewWidth(): number {
-  return Math.max(120, scroller.clientWidth - 48);
+  return Math.max(120, scroller.clientWidth - stagePad());
 }
 
 function computeZoom(pageWpx: number, pageHpx: number): number {
   if (settings.view === 'flow') return settings.zoomMode === 'custom' ? settings.zoom : 1;
   const availW = previewWidth();
-  const availH = Math.max(120, scroller.clientHeight - 48);
+  const availH = Math.max(120, scroller.clientHeight - stagePad());
   if (settings.zoomMode === 'width') return Math.min(3, availW / pageWpx);
   if (settings.zoomMode === 'page') return Math.min(availW / pageWpx, availH / pageHpx);
   return settings.zoom;
@@ -168,11 +180,13 @@ function renderFlow(): void {
   const z = computeZoom(1, 1);
   lastZoom = z;
   const avail = previewWidth();
-  const css = settings.flowFull ? avail / z : Math.min(avail / z, 920);
+  const css = settings.flowFull || isMobile() ? avail / z : Math.min(avail / z, 920);
   const sheet = document.createElement('div');
   sheet.className = 'flow-sheet';
   sheet.style.width = `${css}px`;
-  sheet.style.padding = `${Math.min(40, css * 0.05)}px ${Math.min(48, css * 0.06)}px`;
+  const padV = isMobile() ? 18 : Math.min(40, css * 0.05);
+  const padH = isMobile() ? 16 : Math.min(48, css * 0.06);
+  sheet.style.padding = `${padV}px ${padH}px`;
   sheet.style.zoom = String(z);
   const md = createMd();
   md.innerHTML = currentHtml();
@@ -280,6 +294,11 @@ function applyPageZoom(pageWpx?: number, pageHpx?: number): void {
 }
 
 function render(): void {
+  // On phones the preview is hidden behind other tabs; it renders when shown.
+  if (scroller.clientWidth === 0) {
+    updateStatus();
+    return;
+  }
   if (settings.view === 'flow') renderFlow();
   else renderPages();
   updateStatus();
@@ -289,7 +308,9 @@ function updateStatus(): void {
   const g = geometry(settings);
   $('status-pages').textContent = settings.view === 'pages' ? `${pageCount} page${pageCount === 1 ? '' : 's'}` : 'Flow view';
   const paperName = settings.paper === 'Custom' ? `${g.pageW}×${g.pageH} mm` : settings.paper;
-  $('status-paper').textContent = `${paperName} ${settings.landscape ? 'landscape' : 'portrait'} · margins ${fmt(g.mt)}/${fmt(g.mr)}/${fmt(g.mb)}/${fmt(g.ml)} mm`;
+  $('status-paper').textContent = isMobile()
+    ? `${paperName} · ${fmt(g.mt)} mm margins`
+    : `${paperName} ${settings.landscape ? 'landscape' : 'portrait'} · margins ${fmt(g.mt)}/${fmt(g.mr)}/${fmt(g.mb)}/${fmt(g.ml)} mm`;
   $('status-zoom').textContent = `${Math.round(lastZoom * 100)}%`;
   const sel = $<HTMLSelectElement>('zoom-select');
   if (settings.zoomMode !== 'custom') sel.value = settings.zoomMode;
@@ -529,7 +550,7 @@ function preparePrint(): void {
 
 function buildPagesForPrint(): HTMLElement {
   // Reuse the on-screen pagination when it is current, otherwise build fresh.
-  if (settings.view === 'pages' && pagesEl) {
+  if (settings.view === 'pages' && pagesEl && pagesEl.isConnected && scroller.clientWidth > 0 && htmlFor === source.value) {
     const clone = pagesEl.cloneNode(true) as HTMLElement;
     clone.style.transform = 'none';
     return clone;
@@ -586,13 +607,15 @@ async function wordCopy(): Promise<void> {
     measure.replaceChildren();
     const fragment = wordHtmlFromNodes(frag, settings);
     await copyRich(wrapClipboardHtml(fragment), source.value);
-    btn.classList.add('ok');
+    for (const b of [btn, $('m-wordcopy')]) {
+      b.classList.add('ok');
+      setTimeout(() => b.classList.remove('ok'), 1800);
+    }
     btn.querySelector('span')!.textContent = 'Copied!';
     setTimeout(() => {
-      btn.classList.remove('ok');
       btn.querySelector('span')!.textContent = 'Word copy';
     }, 1800);
-    toast('Copied — paste into Word with Ctrl+V (equations arrive as editable Word equations)');
+    toast(isMobile() ? 'Copied — paste into Word' : 'Copied — paste into Word with Ctrl+V (equations arrive as editable Word equations)');
   } catch (err) {
     toast(`Copy failed: ${(err as Error).message}`, 'error', 4000);
   }
@@ -770,6 +793,7 @@ function initToolbar(): void {
   new ResizeObserver(() => {
     const w = scroller.clientWidth;
     const h = scroller.clientHeight;
+    if (w === 0 || h === 0) return; // hidden (another tab on phones)
     if (w === lastW && h === lastH) return;
     const widthChanged = w !== lastW;
     lastW = w;
@@ -780,11 +804,108 @@ function initToolbar(): void {
   }).observe(scroller);
 }
 
+/* ------------------------------------------------------------------ */
+/* Phone layout                                                        */
+/* ------------------------------------------------------------------ */
+
+type Tab = 'edit' | 'preview' | 'setup' | 'export';
+const mobileQuery = window.matchMedia('(max-width: 820px)');
+let tab: Tab = 'preview';
+
+function isMobile(): boolean {
+  return mobileQuery.matches;
+}
+
+function setTab(next: Tab): void {
+  const prev = tab;
+  tab = next;
+  app.dataset.tab = next;
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#bottom-nav button')) {
+    if (b.dataset.tab === next) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  }
+  if (next === 'export') updateExportSummary();
+  // The preview may have been laid out while hidden (zero size): refresh it on show.
+  if (next === 'preview' && prev !== 'preview') requestAnimationFrame(() => render());
+  if (next !== 'edit') source.blur();
+}
+
+function updateExportSummary(): void {
+  const g = geometry(settings);
+  const paper = settings.paper === 'Custom' ? `${g.pageW}×${g.pageH} mm` : settings.paper;
+  $('m-export-summary').textContent = `${paper} ${settings.landscape ? 'landscape' : 'portrait'} · margins ${fmt(g.mt)} mm${pageCount ? ` · ${pageCount} page${pageCount === 1 ? '' : 's'}` : ''}`;
+}
+
+function applyLayout(): void {
+  const mobile = isMobile();
+  app.classList.toggle('mobile', mobile);
+  if (mobile) setTab(tab);
+  else delete app.dataset.tab;
+}
+
+/** Two-finger pinch zoom on the preview (pages and flow). */
+function initPinchZoom(): void {
+  let startDist = 0;
+  let startZoom = 1;
+  let pinching = false;
+  const dist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  scroller.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      pinching = true;
+      startDist = dist(e.touches);
+      startZoom = lastZoom;
+    }
+  }, { passive: true });
+  scroller.addEventListener('touchmove', (e) => {
+    if (!pinching || e.touches.length !== 2) return;
+    e.preventDefault();
+    const z = Math.max(0.2, Math.min(4, startZoom * (dist(e.touches) / startDist)));
+    if (settings.view === 'pages' && pagesEl && zoomBox) {
+      // Cheap live preview: rescale only; the full re-layout runs when the fingers lift.
+      settings.zoom = z;
+      settings.zoomMode = 'custom';
+      applyPageZoom();
+    } else {
+      settings.zoom = z;
+      settings.zoomMode = 'custom';
+    }
+  }, { passive: false });
+  scroller.addEventListener('touchend', (e) => {
+    if (!pinching || e.touches.length > 0) return;
+    pinching = false;
+    setZoom(settings.zoom);
+  });
+}
+
+function initMobile(): void {
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#bottom-nav button')) {
+    b.addEventListener('click', () => setTab(b.dataset.tab as Tab));
+  }
+  $('m-pdf').addEventListener('click', exportPdf);
+  $('m-docx').addEventListener('click', () => void downloadDocx());
+  $('m-wordcopy').addEventListener('click', () => void wordCopy());
+  $('m-goto-setup').addEventListener('click', () => setTab('setup'));
+  // Hide the tab bar while the keyboard is up.
+  source.addEventListener('focus', () => app.classList.add('typing'));
+  source.addEventListener('blur', () => app.classList.remove('typing'));
+  // A fresh visit on a phone opens on the preview; an empty document opens the editor.
+  tab = source.value.trim() ? 'preview' : 'edit';
+  // First visit on a phone: start in the readable Flow view (an explicit choice is kept).
+  if (isMobile() && localStorage.getItem('mdstudio.settings.v1') === null) settings.view = 'flow';
+  mobileQuery.addEventListener('change', () => {
+    applyLayout();
+    scheduleRender(30);
+  });
+  applyLayout();
+  initPinchZoom();
+}
+
 async function boot(): Promise<void> {
   initSetup();
   initZoom();
   initEditor();
   initToolbar();
+  initMobile();
   syncUi();
   // KaTeX metrics depend on its web fonts: wait for them before the first measurement.
   try {

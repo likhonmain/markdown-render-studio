@@ -125,3 +125,11 @@ Latest Chrome, Edge and Firefox; Safari 16.4+. Word copy works best from Chromiu
 ## License
 
 [MIT](LICENSE) © Tanvir Ahamed Likhon
+
+## Mobile status (to check)
+
+The phone layout (bottom tabs: Edit / Preview / Setup / Export) was tested only in a Chrome iPhone emulator, not on a real phone. Still to check:
+
+- On a real Android/iPhone: the keyboard hiding the tab bar while typing, and pinch-to-zoom on the preview.
+- Export PDF from a phone browser (mobile print dialogs vary), the .docx download, and Word copy (clipboard).
+- Landscape orientation on phones and tablet sizes (switch point is 820px).

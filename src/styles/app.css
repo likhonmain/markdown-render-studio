@@ -161,8 +161,111 @@ dialog ol { padding-left: 20px; margin: 10px 0 14px; }
   .tb-btn span { display: none; }
   .tb-btn { padding: 0 9px; }
 }
-@media (max-width: 760px) {
-  .editor-pane { position: absolute; inset: var(--topbar-h) 0 0 0; width: auto; max-width: none; z-index: 4; }
-  .setup-pane { position: absolute; top: var(--topbar-h); right: 0; bottom: 0; z-index: 4; box-shadow: -8px 0 24px rgba(0,0,0,.12); }
-  .splitter { display: none; }
+/* Desktop-only / phone-only parts */
+.export-pane, .bottom-nav { display: none; }
+
+/* =================================================================== */
+/* Phone layout: one section at a time + bottom tab bar                 */
+/* =================================================================== */
+#app.mobile { height: 100dvh; }
+#app.mobile .topbar { height: 48px; gap: 6px; padding: 0 8px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+#app.mobile .brand { margin-right: auto; }
+#app.mobile .brand-name { display: inline; font-size: 14px; }
+#app.mobile .topbar > .tb-group:not(.zoom):not(.seg),
+#app.mobile .topbar > .spacer { display: none; }
+#app.mobile .topbar > .seg,
+#app.mobile .topbar > .zoom { display: none; }
+#app.mobile[data-tab="preview"] .topbar > .seg,
+#app.mobile[data-tab="preview"] .topbar > .zoom { display: flex; }
+#app.mobile[data-tab="preview"] .brand-name { display: none; }
+#app.mobile .zoom select { min-width: 0; width: 92px; height: 34px; font-size: 13px; }
+#app.mobile .zoom .tb-btn.icon { width: 34px; height: 34px; }
+#app.mobile .seg-btn { height: 28px; padding: 0 10px; }
+
+#app.mobile .workspace { position: relative; overflow: hidden; }
+/* every section fills the area; only the active one is shown */
+#app.mobile .editor-pane,
+#app.mobile .preview-pane,
+#app.mobile .setup-pane,
+#app.mobile .export-pane {
+  display: none; position: absolute; inset: 0; width: auto !important; max-width: none; min-width: 0;
+  border: 0; box-shadow: none; z-index: 1;
 }
+#app.mobile .splitter { display: none !important; }
+#app.mobile[data-tab="edit"] .editor-pane,
+#app.mobile[data-tab="preview"] .preview-pane,
+#app.mobile[data-tab="setup"] .setup-pane,
+#app.mobile[data-tab="export"] .export-pane { display: flex; }
+/* panel toggles from the desktop don't apply on phones */
+#app.mobile.no-editor[data-tab="edit"] .editor-pane,
+#app.mobile.no-setup[data-tab="setup"] .setup-pane { display: flex; }
+
+#app.mobile .pane-head { height: 44px; padding: 0 8px 0 14px; }
+#app.mobile .mini-btn { height: 34px; padding: 0 10px; font-size: 13px; }
+/* 16px stops iOS from zooming into the textarea on focus */
+#app.mobile #source { font-size: 16px; line-height: 1.55; padding: 12px 14px 24px; }
+
+#app.mobile .preview-stage { padding: 12px 10px 24px; }
+#app.mobile .pages { gap: 12px; }
+#app.mobile .statusbar { gap: 6px; padding: 0 12px; white-space: nowrap; overflow: hidden; }
+#app.mobile #status-paper { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#app.mobile #status-msg { display: none; }
+#app.mobile .flow-sheet { border-radius: 8px; }
+
+/* setup: bigger touch targets */
+#app.mobile .setup-body { padding: 0 16px 28px; }
+#app.mobile .row select, #app.mobile .field select { height: 42px; font-size: 16px; }
+#app.mobile .seg.small .seg-btn { height: 36px; font-size: 14px; }
+#app.mobile .chip { height: 34px; padding: 0 13px; font-size: 13px; border-radius: 17px; }
+#app.mobile .check { min-height: 36px; font-size: 14px; }
+#app.mobile .check input { width: 20px; height: 20px; }
+#app.mobile .m-field { grid-template-columns: 52px 1fr 64px; min-height: 40px; font-size: 13px; }
+#app.mobile .m-field input[type="number"] { width: 64px; height: 36px; font-size: 16px; }
+#app.mobile .custom-size input { height: 38px; font-size: 16px; width: 76px; }
+#app.mobile input[type="range"] { height: 28px; }
+
+/* export tab */
+#app.mobile .export-pane { flex-direction: column; background: var(--panel); }
+.export-body { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.export-card {
+  display: flex; align-items: flex-start; gap: 14px; width: 100%; text-align: left; padding: 16px;
+  border: 1px solid var(--line-2); border-radius: 14px; background: #fff; cursor: pointer;
+}
+.export-card svg { width: 24px; height: 24px; margin-top: 1px; color: var(--accent); }
+.export-card span { display: flex; flex-direction: column; gap: 4px; }
+.export-card b { font-size: 15px; }
+.export-card small { color: var(--muted); font-size: 13px; line-height: 1.4; }
+.export-card.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.export-card.primary svg, .export-card.primary small { color: rgba(255,255,255,.9); }
+.export-card:active { transform: scale(.99); }
+.export-card.ok { border-color: #12b76a; background: #ecfdf3; }
+.export-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; padding: 4px 2px; }
+
+/* bottom tab bar */
+#app.mobile .bottom-nav {
+  display: flex; flex: none; background: var(--panel); border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom); z-index: 6;
+}
+.bottom-nav button {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  height: 56px; border: 0; background: none; color: var(--faint); font-size: 11.5px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.bottom-nav button svg { width: 22px; height: 22px; }
+.bottom-nav button[aria-current="page"] { color: var(--accent); font-weight: 600; }
+/* hide the tab bar while typing so the keyboard leaves room for text */
+#app.mobile.typing .bottom-nav { display: none; }
+
+#app.mobile #toast { bottom: calc(72px + env(safe-area-inset-bottom)); }
+#app.mobile .preview-scroll { touch-action: pan-x pan-y; overscroll-behavior: contain; }
+
+/* phone flow view: tighter table cells; very wide tables scroll sideways */
+#app.mobile .flow-sheet .md th,
+#app.mobile .flow-sheet .md td { padding: 8px 10px; }
+#app.mobile .flow-sheet .md th:first-child,
+#app.mobile .flow-sheet .md td:first-child { padding-left: 0; }
+#app.mobile .flow-sheet .md .table-wrap.scroll-x {
+  overflow-x: auto; -webkit-overflow-scrolling: touch; position: relative;
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+#app.mobile .flow-sheet .md .table-wrap.scroll-x table { max-width: none; }
