@@ -1,0 +1,5 @@
+﻿node_modules
+dist
+*.log
+# local scratch copy of the sample (the app's built-in sample is src/sample.md)
+input.txt

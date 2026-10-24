@@ -1,0 +1,137 @@
+/*
+ * Markdown typography modelled on DeepSeek Harness's chat renderer
+ * (dsh-web-frontend `_markdown` / `_tableScroll` rules + dsh-client-ui-theme
+ * font tokens). Sizes are driven by CSS variables so the font-size and
+ * line-spacing controls scale everything proportionally.
+ */
+.md {
+  --md-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --md-code-font: "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  --k: 1; /* font-size / 14px */
+  --ls: 1; /* line spacing multiplier */
+  --md-fs: 14px;
+  --md-lh: calc(24px * var(--k) * var(--ls));
+  --md-tfs: 13px;
+  --md-tlh: calc(22px * var(--k) * var(--ls));
+  --md-text: #0f1115;
+  --md-muted: #61666b;
+  --md-border-l1: rgba(0, 0, 0, 0.08);
+  --md-border-l2: rgba(0, 0, 0, 0.1);
+  --md-border-l3: rgba(0, 0, 0, 0.12);
+  --md-grid: #c9ced4;
+  --md-link: #3964fe;
+  --md-code-bg: #f3f4f6;
+
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--md-font);
+  font-size: var(--md-fs);
+  line-height: var(--md-lh);
+  font-weight: 400;
+  color: var(--md-text);
+  text-align: start;
+  -webkit-font-smoothing: antialiased;
+}
+
+.md strong { font-weight: 600; }
+
+.md h1 { font-size: calc(var(--md-fs) + 7px * var(--k)); line-height: calc(30px * var(--k) * var(--ls)); font-weight: 700; margin: calc(32px * var(--k)) 0 calc(16px * var(--k)); }
+.md h2 { font-size: calc(var(--md-fs) + 5px * var(--k)); line-height: calc(28px * var(--k) * var(--ls)); font-weight: 700; margin: calc(32px * var(--k)) 0 calc(16px * var(--k)); }
+.md h3 { font-size: calc(var(--md-fs) + 4px * var(--k)); line-height: calc(26px * var(--k) * var(--ls)); font-weight: 700; margin: calc(32px * var(--k)) 0 calc(16px * var(--k)); }
+.md h4 { font-size: var(--md-fs); line-height: var(--md-lh); font-weight: 600; margin: calc(16px * var(--k)) 0; }
+.md :where(h5, h6) { font-size: var(--md-fs); line-height: var(--md-lh); font-weight: 600; margin: calc(16px * var(--k)) 0; }
+.md :where(h1, h2, h3, h4, h5, h6) strong { font-weight: inherit; }
+
+.md p { margin: calc(16px * var(--k)) 0; }
+.md :where(h4, h5, h6) + :where(ul, ol) { margin-top: calc(8px * var(--k)); }
+
+.md a { color: var(--md-link); font-weight: 500; text-decoration: none; }
+.md a:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
+
+.md :where(ul, ol) { margin: calc(16px * var(--k)) 0; padding-left: calc(18px * var(--k)); }
+.md li:not(:first-child) { margin-top: calc(6px * var(--k)); }
+.md li > :where(ul, ol) { margin-top: calc(4px * var(--k)); }
+.md li::marker { color: var(--md-muted); }
+.md :where(ul, ol) ol { list-style-position: inside; padding-left: 0; }
+.md :where(ul, ol) ol li > :where(p, .li-run):first-child { display: inline; }
+.md li > p { margin: calc(8px * var(--k)) 0; }
+.md li > *:first-child { margin-top: 0; }
+.md li > *:last-child:not(pre) { margin-bottom: 0; }
+.md .li-run { margin: 0; }
+.md li.cont { list-style-type: none; }
+.md li.cont::marker { content: none; }
+
+.md hr { display: block; border: none; height: 0.5px; margin: calc(32px * var(--k)) 0; background: var(--md-border-l2); }
+.md hr.page-break { height: 0; margin: 24px 0; border-top: 1px dashed #b8bec6; background: none; position: relative; overflow: visible; }
+.md hr.page-break::after {
+  content: "page break"; position: absolute; left: 50%; top: -9px; transform: translateX(-50%);
+  font: 10px/16px var(--md-font); color: #8a9099; background: #fff; padding: 0 8px; letter-spacing: 0.04em; text-transform: uppercase;
+}
+
+.md blockquote { border-left: 2px solid #9ba0a6; margin: calc(16px * var(--k)) 0 0; padding-left: 14px; color: inherit; }
+
+.md pre {
+  margin: calc(16px * var(--k)) 0; padding: 12px 16px; border-radius: 10px; background: var(--md-code-bg);
+  font: calc(12px * var(--k)) / calc(19px * var(--k)) var(--md-code-font); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.md pre code { font: inherit; background: none; border: 0; padding: 0; }
+.md :not(pre) > code {
+  font-family: var(--md-code-font); font-size: 0.875em; background-color: var(--md-code-bg);
+  border: 0.5px solid var(--md-border-l1); border-radius: 4px; padding: 0 5px;
+}
+.md :where(h1, h2, h3, h4, h5, h6) code { font: inherit; font-family: var(--md-code-font); }
+
+.md input[type="checkbox"] { margin: 0 8px 0 0; accent-color: var(--md-muted); }
+.md img { max-width: 100%; }
+.md del { color: var(--md-muted); }
+
+/* ---- Math ---------------------------------------------------------------- */
+.md .katex { text-rendering: auto; }
+.md .math-display { margin: 0; max-width: 100%; }
+.md .math-display > .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 1px 0; }
+.md .katex-error { color: #cc0000; white-space: pre-wrap; }
+.md.fit-math .math-display > .katex-display { overflow: visible; }
+
+/* ---- Tables (DSH "minimal" look) ----------------------------------------- */
+.md .table-wrap { max-width: 100%; overflow-x: auto; margin: calc(16px * var(--k)) 0; }
+.md table { border-collapse: collapse; width: 100%; }
+.md th {
+  text-align: start; padding: calc(10px * var(--k)) calc(16px * var(--k)); border-bottom: 0.5px solid var(--md-border-l3);
+  font-size: var(--md-tfs); line-height: var(--md-tlh); font-weight: 500; vertical-align: bottom;
+}
+.md td {
+  padding: calc(10px * var(--k)) calc(16px * var(--k)); border-bottom: 0.5px solid var(--md-border-l2);
+  font-size: var(--md-tfs); line-height: var(--md-tlh); vertical-align: middle;
+}
+.md th:first-child, .md td:first-child { padding-left: 0; }
+.md td:last-child { padding-right: 0; }
+.md table code { font-size: 11px; }
+.md th > :first-child, .md td > :first-child { margin-top: 0; }
+
+/* Grid look (also what Word copy / DOCX produce) */
+.md.tables-grid th, .md.tables-grid td { border: 0.75px solid var(--md-grid); padding: calc(6px * var(--k)) calc(10px * var(--k)); }
+.md.tables-grid th { background: #f4f5f7; font-weight: 600; }
+.md.tables-grid th:first-child, .md.tables-grid td:first-child { padding-left: calc(10px * var(--k)); }
+.md.tables-grid td:last-child { padding-right: calc(10px * var(--k)); }
+
+/* Fit-to-width mode: tables always fill the column and wrap instead of scrolling */
+.md.fit-tables .table-wrap { overflow: visible; }
+.md.fit-tables table { table-layout: auto; }
+/* `anywhere` would let min-content collapse to one character per line; `break-word`
+   keeps words whole when measuring, yet still breaks a word that cannot fit. */
+.md table :where(th, td) { overflow-wrap: break-word; word-break: normal; hyphens: manual; }
+
+/* ---- Edge margins ---------------------------------------------------------- */
+.md > :first-child, .md p:first-child { margin-top: 0 !important; }
+.md > :last-child, .md p:last-child { margin-bottom: 0 !important; }
+.md > :first-child > li:first-child > :first-child { margin-top: 0 !important; }
+.md > :last-child > :last-child,
+.md > :last-child > :last-child > :last-child,
+.md > :last-child > :last-child > :last-child > :last-child { margin-bottom: 0 !important; }
+
+/* Split fragments (pagination) */
+.md .split-tail { margin-top: 0 !important; text-indent: 0; }
+.md .split-head { margin-bottom: 0 !important; }
+.md .frag-tail { margin-top: 0 !important; }
+.md .frag-head { margin-bottom: 0 !important; }
