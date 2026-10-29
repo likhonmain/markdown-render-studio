@@ -84,8 +84,10 @@
         <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
 
         <section class="preview-pane" aria-label="Rendered preview">
+          <div class="edit-bar" id="edit-bar" role="toolbar" aria-label="Page editing"></div>
+          <div class="edit-banner" id="edit-banner" hidden></div>
           <div class="preview-scroll" id="preview-scroll">
-            <div class="preview-stage" id="stage"></div>
+            <div class="preview-stage" id="stage" spellcheck="false" autocapitalize="sentences"></div>
           </div>
           <div class="statusbar">
             <span id="status-pages">—</span>

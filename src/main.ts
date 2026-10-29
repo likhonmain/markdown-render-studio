@@ -10,6 +10,9 @@ import {
   type FontId, type Margins, type PaperId, type Settings,
 } from './settings';
 import { copyRich, wordHtmlFromNodes, wrapClipboardHtml } from './wordcopy';
+import { PageEditor } from './editor';
+import { hydrateFigures, figData, picHeight } from './flow';
+import { croppedDataUrl } from './store';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -34,6 +37,10 @@ let pagesEl: HTMLElement | null = null;
 let zoomBox: HTMLElement | null = null;
 let pageCount = 0;
 let lastZoom = 1;
+let lastPagesHtml = '\u0000';
+let lastBuiltHtml = '';
+let flowMdEl: HTMLElement | null = null;
+let editor: PageEditor | null = null;
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -73,7 +80,12 @@ function createMd(): HTMLElement {
   return el;
 }
 
+/** HTML the preview shows: the edited page document, or the Markdown render. */
 function currentHtml(): string {
+  return editor ? editor.pageHtml(() => mdHtml()) : mdHtml();
+}
+
+function mdHtml(): string {
   if (htmlFor !== source.value) {
     try {
       html = markdownToHtml(source.value);
@@ -179,6 +191,7 @@ function computeZoom(pageWpx: number, pageHpx: number): number {
 function renderFlow(): void {
   const z = computeZoom(1, 1);
   lastZoom = z;
+  stage.style.setProperty('--iz', String(1 / z));
   const avail = previewWidth();
   const css = settings.flowFull || isMobile() ? avail / z : Math.min(avail / z, 920);
   const sheet = document.createElement('div');
@@ -190,11 +203,15 @@ function renderFlow(): void {
   sheet.style.zoom = String(z);
   const md = createMd();
   md.innerHTML = currentHtml();
+  hydrateFigures(md);
+  editor?.decorateFlow(md);
   sheet.appendChild(md);
   const top = scroller.scrollTop;
   stage.replaceChildren(sheet);
   fitContent(md);
   scroller.scrollTop = top;
+  flowMdEl = md;
+  lastPagesHtml = '\u0000';
   pagesEl = null;
   zoomBox = null;
   pageCount = 0;
@@ -215,7 +232,9 @@ function buildPages(target: HTMLElement): { el: HTMLElement; count: number } {
   // Lay the document out once at the page's text width, fit tables/equations there.
   const src = createMd();
   src.style.width = `${contentW}px`;
-  src.innerHTML = currentHtml();
+  const docHtml = currentHtml();
+  src.innerHTML = docHtml;
+  hydrateFigures(src);
   measure.replaceChildren(src);
   fitContent(src);
 
@@ -239,7 +258,7 @@ function buildPages(target: HTMLElement): { el: HTMLElement; count: number } {
     return { page, content };
   };
 
-  const slots = paginate(src, contentH, newSlot);
+  const slots = paginate(src, contentH, newSlot, editor ? { bands: editor.bands(g), minPages: editor.minPages() } : {});
   measure.replaceChildren();
   slots.forEach((s, i) => {
     if (settings.pageNumbers) {
@@ -254,12 +273,15 @@ function buildPages(target: HTMLElement): { el: HTMLElement; count: number } {
     label.className = 'page-label';
     s.page.appendChild(label);
   });
+  editor?.decoratePages(pages);
+  lastBuiltHtml = docHtml;
   return { el: pages, count: slots.length };
 }
 
-function renderPages(): void {
+function renderPages(keepAbsolute = false): void {
   const g = geometry(settings);
   const keepRatio = scroller.scrollHeight > scroller.clientHeight ? scroller.scrollTop / scroller.scrollHeight : 0;
+  const keepTop = scroller.scrollTop;
   const box = document.createElement('div');
   box.className = 'zoom-box';
   // Paginate inside the off-screen sandbox, then move into view.
@@ -273,8 +295,10 @@ function renderPages(): void {
   pagesEl = built.el;
   zoomBox = box;
   pageCount = built.count;
+  flowMdEl = null;
+  lastPagesHtml = lastBuiltHtml;
   applyPageZoom(g.pageW * MM_PX, g.pageH * MM_PX);
-  scroller.scrollTop = keepRatio * scroller.scrollHeight;
+  scroller.scrollTop = keepAbsolute ? keepTop : keepRatio * scroller.scrollHeight;
 }
 
 function applyPageZoom(pageWpx?: number, pageHpx?: number): void {
@@ -284,6 +308,7 @@ function applyPageZoom(pageWpx?: number, pageHpx?: number): void {
   const h = pageHpx ?? g.pageH * MM_PX;
   const z = computeZoom(w, h);
   lastZoom = z;
+  stage.style.setProperty('--iz', String(1 / z));
   pagesEl.style.transform = `scale(${z})`;
   pagesEl.style.transformOrigin = 'top left';
   const natW = pagesEl.offsetWidth;
@@ -293,15 +318,34 @@ function applyPageZoom(pageWpx?: number, pageHpx?: number): void {
   updateStatus();
 }
 
-function render(): void {
+function render(keepAbsolute = false): void {
   // On phones the preview is hidden behind other tabs; it renders when shown.
   if (scroller.clientWidth === 0) {
     updateStatus();
     return;
   }
+  editor?.prepareRender();
   if (settings.view === 'flow') renderFlow();
-  else renderPages();
+  else renderPages(keepAbsolute || !!editor?.enabled);
+  editor?.afterRender();
+  if (editor?.enabled) keepCaretVisible();
   updateStatus();
+}
+
+/** After a re-layout, scroll just enough to keep the caret on screen. */
+function keepCaretVisible(): void {
+  const sel = getSelection();
+  if (!sel || !sel.rangeCount || !stage.contains(sel.anchorNode)) return;
+  const r = sel.getRangeAt(0);
+  let rect = r.getBoundingClientRect();
+  if (!rect.height) {
+    const el = r.startContainer.nodeType === Node.ELEMENT_NODE ? (r.startContainer as Element) : r.startContainer.parentElement;
+    if (!el) return;
+    rect = el.getBoundingClientRect();
+  }
+  const box = scroller.getBoundingClientRect();
+  if (rect.bottom > box.bottom - 24) scroller.scrollTop += rect.bottom - box.bottom + 60;
+  else if (rect.top < box.top + 8) scroller.scrollTop -= box.top - rect.top + 60;
 }
 
 function updateStatus(): void {
@@ -334,7 +378,7 @@ function scheduleRender(delay = 0): void {
   clearTimeout(renderTimer);
   cancelAnimationFrame(renderRaf);
   renderTimer = window.setTimeout(() => {
-    renderRaf = requestAnimationFrame(render);
+    renderRaf = requestAnimationFrame(() => render());
   }, delay);
 }
 
@@ -549,18 +593,23 @@ function preparePrint(): void {
 }
 
 function buildPagesForPrint(): HTMLElement {
+  editor?.flushNow();
   // Reuse the on-screen pagination when it is current, otherwise build fresh.
-  if (settings.view === 'pages' && pagesEl && pagesEl.isConnected && scroller.clientWidth > 0 && htmlFor === source.value) {
-    const clone = pagesEl.cloneNode(true) as HTMLElement;
+  let clone: HTMLElement;
+  if (settings.view === 'pages' && pagesEl && pagesEl.isConnected && scroller.clientWidth > 0 && lastPagesHtml === currentHtml()) {
+    clone = pagesEl.cloneNode(true) as HTMLElement;
     clone.style.transform = 'none';
-    return clone;
+  } else {
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden;';
+    document.body.appendChild(holder);
+    clone = buildPages(holder).el;
+    holder.remove();
   }
-  const holder = document.createElement('div');
-  holder.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden;';
-  document.body.appendChild(holder);
-  const built = buildPages(holder);
-  holder.remove();
-  return built.el;
+  for (const el of clone.querySelectorAll('.ed-ui')) el.remove();
+  for (const el of clone.querySelectorAll('.sel')) el.classList.remove('sel');
+  for (const el of clone.querySelectorAll('[contenteditable]')) el.removeAttribute('contenteditable');
+  return clone;
 }
 
 function exportPdf(): void {
@@ -593,20 +642,56 @@ function suggestedName(): string {
 /* Word                                                                */
 /* ------------------------------------------------------------------ */
 
+/** The document laid out at page text width (for Word copy / .docx). */
+function exportMd(): HTMLElement {
+  const g = geometry(settings);
+  const md = createMd();
+  md.style.width = `${(g.pageW - g.ml - g.mr) * MM_PX}px`;
+  if (editor?.edited) {
+    editor.flushNow();
+    // Fixed pictures go into the text where they sit on the page.
+    const pages = buildPagesForPrint();
+    measure.replaceChildren(pages);
+    md.innerHTML = editor.exportFlow(pages).innerHTML;
+  } else md.innerHTML = currentHtml();
+  hydrateFigures(md);
+  measure.replaceChildren(md);
+  return md;
+}
+
+/** Word copy: pictures become cropped <img> data URLs Word can paste. */
+async function inlinePictures(root: DocumentFragment): Promise<void> {
+  for (const fig of root.querySelectorAll<HTMLElement>('figure.ed-fig')) {
+    const p = figData(fig);
+    const url = await croppedDataUrl(p.img, p.crop);
+    const wPx = Math.round(p.w * MM_PX);
+    const hPx = Math.round(picHeight(p) * MM_PX);
+    const para = document.createElement('p');
+    const al = fig.dataset.align ?? 'center';
+    para.setAttribute('align', al.includes('right') ? 'right' : al.includes('left') ? 'left' : 'center');
+    para.style.textAlign = para.getAttribute('align')!;
+    if (url) {
+      const img = document.createElement('img');
+      img.src = url;
+      img.width = wPx;
+      img.height = hPx;
+      img.style.cssText = `width:${wPx}px;height:${hPx}px;`;
+      para.appendChild(img);
+    }
+    fig.replaceWith(para);
+  }
+}
+
 async function wordCopy(): Promise<void> {
   const btn = $<HTMLButtonElement>('btn-wordcopy');
   try {
-    // Lay out at page text width so table/equation fitting matches the PDF.
-    const g = geometry(settings);
-    const md = createMd();
-    md.style.width = `${(g.pageW - g.ml - g.mr) * MM_PX}px`;
-    md.innerHTML = currentHtml();
-    measure.replaceChildren(md);
+    const md = exportMd();
     const frag = document.createDocumentFragment();
     frag.append(...[...md.childNodes].map((n) => n.cloneNode(true)));
     measure.replaceChildren();
+    if (editor?.edited) await inlinePictures(frag);
     const fragment = wordHtmlFromNodes(frag, settings);
-    await copyRich(wrapClipboardHtml(fragment), source.value);
+    await copyRich(wrapClipboardHtml(fragment), editor?.edited ? (md.innerText || md.textContent || '') : source.value);
     for (const b of [btn, $('m-wordcopy')]) {
       b.classList.add('ok');
       setTimeout(() => b.classList.remove('ok'), 1800);
@@ -625,8 +710,13 @@ async function downloadDocx(): Promise<void> {
   const btn = $<HTMLButtonElement>('btn-docx');
   btn.disabled = true;
   try {
-    const { markdownToDocx } = await import('./docx');
-    const blob = await markdownToDocx(source.value, settings);
+    const docx = await import('./docx');
+    let blob: Blob;
+    if (editor?.edited) {
+      const md = exportMd();
+      blob = await docx.htmlToDocx(md, settings);
+      measure.replaceChildren();
+    } else blob = await docx.markdownToDocx(source.value, settings);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${suggestedName()}.docx`;
@@ -654,12 +744,17 @@ function updateStats(): void {
 }
 
 let saveTimer = 0;
+function saveSource(): void {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  try { localStorage.setItem(SOURCE_KEY, source.value); } catch { /* ignore */ }
+}
+
 function onSourceChange(): void {
   updateStats();
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => {
-    try { localStorage.setItem(SOURCE_KEY, source.value); } catch { /* ignore */ }
-  }, 400);
+  saveTimer = window.setTimeout(saveSource, 400);
+  editor?.onMarkdownChange();
   scheduleRender(source.value.length > 40000 ? 450 : 200);
 }
 
@@ -714,8 +809,13 @@ function initEditor(): void {
     const f = e.dataTransfer?.files?.[0];
     if (!f) return;
     e.preventDefault();
+    if (f.type.startsWith('image/')) {
+      if (editor) void editor.insertPictureFile(f);
+      return;
+    }
     setSource(await f.text());
   });
+  window.addEventListener('pagehide', saveSource);
 
   // Splitter
   const splitter = $('splitter');
@@ -900,6 +1000,39 @@ function initMobile(): void {
   initPinchZoom();
 }
 
+async function initPageEditor(): Promise<void> {
+  const ed = new PageEditor({
+    host: stage,
+    bar: $('edit-bar'),
+    banner: $('edit-banner'),
+    scroller,
+    settings: () => settings,
+    saveSettings: () => saveSettings(settings),
+    pages: () => pagesEl,
+    flowMd: () => flowMdEl,
+    zoom: () => lastZoom,
+    rerender: () => render(true),
+    markdown: () => source.value,
+    toast,
+    status: (m) => { $('status-msg').textContent = m; },
+    isMobile,
+  });
+  try {
+    await ed.init();
+  } catch (err) {
+    console.error(err);
+    toast('Page editing could not start in this browser', 'error', 5000);
+    return;
+  }
+  editor = ed;
+  // Phones/tablets: while typing on the page, hide the tab bar to make room for the keyboard.
+  stage.addEventListener('focusin', () => app.classList.add('typing'));
+  stage.addEventListener('focusout', () => setTimeout(() => {
+    if (!stage.contains(document.activeElement)) app.classList.remove('typing');
+  }, 0));
+  if (isMobile() && ed.edited) setTab('preview');
+}
+
 async function boot(): Promise<void> {
   initSetup();
   initZoom();
@@ -907,6 +1040,7 @@ async function boot(): Promise<void> {
   initToolbar();
   initMobile();
   syncUi();
+  const editorReady = initPageEditor();
   // KaTeX metrics depend on its web fonts: wait for them before the first measurement.
   try {
     await Promise.race([
@@ -915,6 +1049,7 @@ async function boot(): Promise<void> {
     ]);
     await document.fonts.ready;
   } catch { /* render anyway */ }
+  await editorReady;
   render();
   // Late-loading fonts (bold/italic variants) change metrics: re-render once more.
   document.fonts.addEventListener?.('loadingdone', () => scheduleRender(50));

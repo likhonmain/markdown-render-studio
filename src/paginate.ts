@@ -5,11 +5,30 @@
 // list items, blockquotes, tables) split between children, the open ancestor
 // chain is re-created on the next page, and inline content (paragraphs,
 // list-item text) splits between lines. Atomic blocks (headings, display math,
-// table rows, rules) move to the next page whole.
+// table rows, rules, pictures) move to the next page whole.
+//
+// Pages can contain "bands" (areas covered by pictures fixed to the page) that
+// text must skip: the page is then cut into several vertical regions and
+// content flows from one region into the next exactly as it flows between pages.
+//
+// Every element that gets split carries a `data-sid` shared by all of its
+// fragments, so an editor can join the fragments back into one flow.
 
 export interface PageSlot {
   page: HTMLElement;
   content: HTMLElement;
+}
+
+export interface Band {
+  top: number; // px from the top of the content box
+  bottom: number;
+}
+
+export interface PaginateOptions {
+  /** Areas text has to avoid, per page index (content-box pixels). */
+  bands?: (page: number) => Band[];
+  /** Never produce fewer pages than this (pages holding only fixed pictures). */
+  minPages?: number;
 }
 
 interface StackEntry {
@@ -18,11 +37,20 @@ interface StackEntry {
   cursor: Element | null;
 }
 
+interface Region {
+  top: number;
+  bottom: number;
+}
+
 const ATOMIC = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'TR', 'THEAD', 'IMG', 'svg', 'math']);
 const INLINE_ATOM_SELECTOR = '.katex, img, br, input';
+const MIN_REGION = 14; // px; a gap smaller than a text line is not worth filling
+
+let sidCounter = 0;
+const newSid = () => `f${(++sidCounter).toString(36)}`;
 
 function isAtomic(el: Element): boolean {
-  return ATOMIC.has(el.tagName) || el.classList.contains('math-display') || el.classList.contains('katex-display');
+  return ATOMIC.has(el.tagName) || el.classList.contains('math-display') || el.classList.contains('katex-display') || el.classList.contains('ed-fig');
 }
 
 function isBlock(el: Element): boolean {
@@ -35,10 +63,12 @@ function hasBlockChildren(el: Element): boolean {
   return false;
 }
 
-function hasContent(el: Element): boolean {
+export function hasContent(el: Element): boolean {
+  if (el.classList.contains('ex-spacer')) return false;
   if (el.tagName === 'TABLE') return el.querySelector('tbody tr') !== null;
   if (el.tagName === 'TBODY') return el.querySelector('tr') !== null;
   if (el.classList.contains('table-wrap')) return el.querySelector('tbody tr') !== null;
+  if (el.tagName === 'BR' || el.classList.contains('blank-lines') || el.classList.contains('ed-fig')) return true;
   for (const c of el.childNodes) {
     if (c.nodeType === Node.TEXT_NODE && (c.textContent ?? '').trim() !== '') return true;
     if (c.nodeType === Node.ELEMENT_NODE && hasContent(c as Element)) return true;
@@ -63,10 +93,13 @@ export function paginate(
   source: HTMLElement,
   contentHeight: number,
   newSlot: () => PageSlot,
+  opts: PaginateOptions = {},
 ): PageSlot[] {
   const slots: PageSlot[] = [];
-  let cur: PageSlot;
-  let placed = 0; // leaf nodes placed on the current page
+  let cur!: PageSlot;
+  let placed = 0; // leaf nodes placed in the current region
+  let regions: Region[] = [{ top: 0, bottom: contentHeight }];
+  let ri = 0; // current region index
   const stack: StackEntry[] = [];
   const LIMIT_SLACK = 0.5;
 
@@ -76,26 +109,97 @@ export function paginate(
     for (const li of ol.children) if (li.tagName === 'LI') li.setAttribute('value', String(n++));
   }
 
+  const contentTop = () => cur.content.getBoundingClientRect().top;
+  const limit = () => contentTop() + regions[ri].bottom + LIMIT_SLACK;
+  const overflows = (el: Element) => el.getBoundingClientRect().bottom > limit();
+  const top = () => stack[stack.length - 1];
+
+  function computeRegions(pageIndex: number): Region[] {
+    const bands = (opts.bands?.(pageIndex) ?? [])
+      .map((b) => ({ top: Math.max(0, b.top), bottom: Math.min(contentHeight, b.bottom) }))
+      .filter((b) => b.bottom > b.top)
+      .sort((a, b) => a.top - b.top);
+    const out: Region[] = [];
+    let start = 0;
+    for (const b of bands) {
+      if (b.top - start >= MIN_REGION) out.push({ top: start, bottom: b.top });
+      start = Math.max(start, b.bottom);
+    }
+    if (contentHeight - start >= MIN_REGION || out.length === 0) out.push({ top: Math.min(start, contentHeight), bottom: contentHeight });
+    return out;
+  }
+
+  /** Starts filling region `i` of the current page (a spacer skips any band above it). */
+  function enterRegion(i: number): void {
+    ri = i;
+    placed = 0;
+    const target = regions[i].top;
+    if (target <= 0.5) return;
+    const sp = document.createElement('div');
+    sp.className = 'ex-spacer';
+    sp.setAttribute('contenteditable', 'false');
+    sp.setAttribute('aria-hidden', 'true');
+    cur.content.appendChild(sp);
+    const y = sp.getBoundingClientRect().top - contentTop();
+    sp.style.height = `${Math.max(0, target - y).toFixed(2)}px`;
+  }
+
   const open = () => {
     cur = newSlot();
     slots.push(cur);
-    placed = 0;
+    regions = computeRegions(slots.length - 1);
+    enterRegion(0);
   };
   open();
-  stack.push({ src: source, clone: cur!.content, cursor: null });
+  stack.push({ src: source, clone: cur.content, cursor: null });
 
-  const top = () => stack[stack.length - 1];
-  const contentTop = () => cur.content.getBoundingClientRect().top;
-  const limit = () => contentTop() + contentHeight + LIMIT_SLACK;
-  const overflows = (el: Element) => el.getBoundingClientRect().bottom > limit();
-
-  function breakPage(): void {
-    const old = cur;
-    // Drop shells that ended up empty on the old page.
+  function dropEmptyShells(): void {
     for (let i = stack.length - 1; i >= 1; i--) {
       const shell = stack[i].clone;
       if (shell.isConnected && !hasContent(shell)) shell.remove();
     }
+  }
+
+  /** Re-creates the chain of open containers at the current insertion point. */
+  function reopenShells(): void {
+    let parent: Element = cur.content;
+    stack[0].clone = parent;
+    for (let i = 1; i < stack.length; i++) {
+      const entry = stack[i];
+      const continued = entry.clone.isConnected;
+      const shell = entry.src.cloneNode(false) as Element;
+      shell.setAttribute('data-shell', '');
+      if (continued) {
+        shell.classList.add('split-tail');
+        if (shell.tagName === 'LI') shell.classList.add('cont');
+      }
+      if (shell.tagName === 'TABLE') {
+        // Repeat the header row on every page the table continues onto.
+        const thead = entry.src.querySelector(':scope > thead');
+        const colgroup = entry.src.querySelector(':scope > colgroup');
+        if (colgroup) shell.appendChild(colgroup.cloneNode(true));
+        if (thead) {
+          const t = thead.cloneNode(true) as Element;
+          t.setAttribute('data-repeat', '');
+          shell.appendChild(t);
+        }
+      }
+      parent.appendChild(shell);
+      entry.clone = shell;
+      parent = shell;
+    }
+  }
+
+  /** Moves on to the next region of this page (around a fixed picture). */
+  function softBreak(): void {
+    dropEmptyShells();
+    enterRegion(ri + 1);
+    reopenShells();
+  }
+
+  function breakPage(): void {
+    const old = cur;
+    dropEmptyShells();
     // Keep a heading-like last block together with what follows it (at any depth).
     let carried: Element | null = null;
     let carriedDepth = -1;
@@ -115,41 +219,28 @@ export function paginate(
       }
       break;
     }
-    if (carried) {
-      // The carried block may have been a shell's only content.
-      for (let i = stack.length - 1; i >= 1; i--) {
-        const shell = stack[i].clone;
-        if (shell.isConnected && !hasContent(shell)) shell.remove();
-      }
-    }
+    if (carried) dropEmptyShells();
     open();
-    let parent: Element = cur.content;
-    stack[0].clone = parent;
-    for (let i = 1; i < stack.length; i++) {
-      const entry = stack[i];
-      const continued = entry.clone.isConnected;
-      const shell = entry.src.cloneNode(false) as Element;
-      shell.setAttribute('data-shell', '');
-      if (continued) {
-        shell.classList.add('split-tail');
-        if (shell.tagName === 'LI') shell.classList.add('cont');
-      }
-      if (shell.tagName === 'TABLE') {
-        // Repeat the header row on every page the table continues onto.
-        const thead = entry.src.querySelector(':scope > thead');
-        const colgroup = entry.src.querySelector(':scope > colgroup');
-        if (colgroup) shell.appendChild(colgroup.cloneNode(true));
-        if (thead) shell.appendChild(thead.cloneNode(true));
-      }
-      parent.appendChild(shell);
-      entry.clone = shell;
-      parent = shell;
-    }
+    reopenShells();
     if (carried && carriedDepth >= 0) {
       const host = stack[carriedDepth].clone;
-      host.insertBefore(carried, host.firstChild);
+      let ref = host.firstChild;
+      while (ref && ref.nodeType === Node.ELEMENT_NODE && (ref as Element).classList.contains('ex-spacer')) ref = ref.nextSibling;
+      host.insertBefore(carried, ref);
       placed = 1;
     }
+  }
+
+  /** Next region on this page, or a new page. */
+  function advance(): void {
+    if (ri < regions.length - 1) softBreak();
+    else breakPage();
+  }
+
+  /** True on an untouched page whose region spans the whole page (nothing better to move to). */
+  function freshFullPage(): boolean {
+    const r = regions[ri];
+    return r.top <= 0.5 && r.bottom >= contentHeight - 0.5 && !hasContent(cur.content);
   }
 
   /** Splits an inline container instance (already in the page) between lines. */
@@ -211,10 +302,12 @@ export function paginate(
       el.appendChild(frag);
       return null;
     }
+    if (!el.hasAttribute('data-sid')) el.setAttribute('data-sid', newSid());
     const rest = el.cloneNode(false) as Element;
     rest.appendChild(frag);
     el.classList.add('split-head');
     rest.classList.add('split-tail');
+    rest.classList.remove('split-head');
     if (rest.tagName === 'LI') rest.classList.add('cont');
     rest.removeAttribute('data-shell');
     return rest;
@@ -233,7 +326,7 @@ export function paginate(
         const rest = splitLines(inst);
         if (rest) {
           placed++;
-          breakPage();
+          advance();
           inst = rest;
           src = null;
           continue;
@@ -247,6 +340,7 @@ export function paginate(
         // A split-off container fragment (rare): place its children one by one.
         inst.remove();
         const shellSrc = inst.cloneNode(false) as Element;
+        if (!shellSrc.hasAttribute('data-sid')) shellSrc.setAttribute('data-sid', newSid());
         const kids = [...inst.childNodes];
         const shell = shellSrc.cloneNode(false) as Element;
         shell.setAttribute('data-shell', '');
@@ -256,10 +350,10 @@ export function paginate(
         stack.pop();
         return;
       }
-      // Atomic or unsplittable.
-      if (placed > 0) {
+      // Atomic or unsplittable: try the next region / page unless nothing better exists.
+      if (placed > 0 || !freshFullPage()) {
         inst.remove();
-        breakPage();
+        advance();
         continue;
       }
       placed++; // taller than a page: let it overflow rather than loop
@@ -268,6 +362,7 @@ export function paginate(
   }
 
   function placeContainer(src: Element): void {
+    if (!src.hasAttribute('data-sid')) src.setAttribute('data-sid', newSid());
     const shell = src.cloneNode(false) as Element;
     shell.setAttribute('data-shell', '');
     top().clone.appendChild(shell);
@@ -295,7 +390,10 @@ export function paginate(
     }
     const el = node as Element;
     if (el.tagName === 'HR' && el.classList.contains('page-break')) {
-      if (placed > 0) breakPage();
+      // Keep the marker (an editor needs it back) at the end of the page, then break.
+      const had = hasContent(cur.content);
+      top().clone.appendChild(el.cloneNode(true));
+      if (had) breakPage();
       return;
     }
     if (el.tagName === 'COLGROUP') {
@@ -310,13 +408,16 @@ export function paginate(
     placeNode(child, child.nodeType === Node.ELEMENT_NODE ? (child as Element) : null);
   }
 
+  const minPages = Math.max(1, opts.minPages ?? 1);
+  while (slots.length < minPages) open();
+
   // Remove trailing empty shells and blank final page.
   for (const s of slots) {
     for (const shell of [...s.content.querySelectorAll('[data-shell]')].reverse()) {
       if (!hasContent(shell)) shell.remove();
     }
   }
-  while (slots.length > 1 && !hasContent(slots[slots.length - 1].content)) {
+  while (slots.length > minPages && !hasContent(slots[slots.length - 1].content)) {
     slots.pop()!.page.remove();
   }
   return slots;

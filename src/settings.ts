@@ -30,6 +30,7 @@ export interface Settings {
   editorOpen: boolean;
   setupOpen: boolean;
   editorWidth: number; // px
+  editMode: boolean; // the rendered page can be edited directly
 }
 
 export const PAPERS: Record<Exclude<PaperId, 'Custom'>, [number, number]> = {
@@ -83,6 +84,7 @@ export const DEFAULTS: Settings = {
   editorOpen: true,
   setupOpen: true,
   editorWidth: 0,
+  editMode: true,
 };
 
 const KEY = 'mdstudio.settings.v1';

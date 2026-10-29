@@ -11,4 +11,7 @@
   #print-root .page-label { display: none; }
   #print-root .page-content { outline: none !important; }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #print-root .fimg .ed-ui, #print-root .ed-ui { display: none !important; }
+  #print-root .sel { outline: none !important; }
+  #print-root .ex-spacer { visibility: hidden; }
 }
