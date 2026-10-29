@@ -44,6 +44,8 @@
 .md :where(h1, h2, h3, h4, h5, h6) strong { font-weight: inherit; }
 
 .md p { margin: calc(16px * var(--k)) 0; }
+/* Extra blank lines typed in the source: each one adds one line of space. */
+.md .blank-lines { --n: 1; display: block; margin: 0 !important; height: max(0px, calc(var(--md-lh) * var(--n) - 16px * var(--k))); }
 .md :where(h4, h5, h6) + :where(ul, ol) { margin-top: calc(8px * var(--k)); }
 
 .md a { color: var(--md-link); font-weight: 500; text-decoration: none; }

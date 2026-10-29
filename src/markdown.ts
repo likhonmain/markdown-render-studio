@@ -77,7 +77,24 @@ export function preprocess(src: string): string {
   let mode: 'none' | 'dollar' | 'bracket' = 'none';
   let mathPrefix = '';
 
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    // Several blank lines in a row: Markdown would collapse them into one paragraph
+    // gap. Keep the extra ones as real vertical space (one text line each).
+    if (!fence && mode === 'none' && line.trim() === '' && out.length > 0) {
+      let j = li;
+      while (j < lines.length && lines[j].trim() === '') j++;
+      const blanks = j - li;
+      const next = lines[j];
+      if (blanks >= 2 && next !== undefined) {
+        const indent = /^[ ]*/.exec(next)![0];
+        if (indent.length < 4 && !next.startsWith('\t')) {
+          out.push('', `${indent}<!-- blank-lines:${Math.min(blanks - 1, 60)} -->`, '');
+          li = j - 1;
+          continue;
+        }
+      }
+    }
     const fm = /^(\s*(?:>\s?)*)(`{3,}|~{3,})/.exec(line);
     if (fence) {
       out.push(line);
@@ -169,6 +186,16 @@ function remarkHtmlAsText() {
       }
       if (/^<!--\s*(page-?break|new-?page)\s*-->$/i.test(v) || /^<div\s+style=["']\s*page-break-(before|after)\s*:\s*always;?\s*["']\s*>\s*<\/div>$/i.test(v)) {
         (p.children as unknown[])[index] = pageBreak();
+        return undefined;
+      }
+      const blank = /^<!--\s*blank-lines:(\d+)\s*-->$/.exec(v);
+      if (blank && (p.type === 'root' || p.type === 'listItem' || p.type === 'blockquote')) {
+        const n = Math.max(1, Math.min(60, Number(blank[1])));
+        (p.children as unknown[])[index] = {
+          type: 'paragraph',
+          children: [],
+          data: { blankLines: n, hName: 'div', hProperties: { className: ['blank-lines'], dataLines: n, style: `--n:${n}` } },
+        };
         return undefined;
       }
       if (/^<!--[\s\S]*-->$/.test(v)) {
@@ -286,6 +313,12 @@ function rehypeDsh() {
         return SKIP;
       }
       return undefined;
+    });
+    // HTML collapses runs of spaces into one; keep what the author typed (the last
+    // space of each run stays a normal space so lines can still wrap there).
+    visit(tree, 'text', (node, _index, parent) => {
+      if (!parent || (parent.type === 'element' && (parent.tagName === 'code' || parent.tagName === 'pre'))) return;
+      if (node.value.includes('  ')) node.value = node.value.replace(/ {2,}/g, (m) => '\u00a0'.repeat(m.length - 1) + ' ');
     });
     // Trim whitespace-only text between block children (keeps DOM tidy for pagination).
     visit(tree, 'element', (node) => {

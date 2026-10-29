@@ -154,8 +154,11 @@ class DocxWriter {
     switch (n.type) {
       case 'heading':
         return [this.para(this.inlines(n.children, {}), ctx, `Heading${n.depth}`)];
-      case 'paragraph':
+      case 'paragraph': {
+        const blank = (n.data as { blankLines?: number } | undefined)?.blankLines;
+        if (blank) return Array.from({ length: blank }, () => this.para('', ctx, ctx.list ? 'ListParagraph' : null, '<w:spacing w:before="0" w:after="0"/>'));
         return [this.para(this.inlines(n.children, { size: cellSize }), ctx, ctx.inTable ? 'TableText' : ctx.list ? 'ListParagraph' : null, '', firstInItem)];
+      }
       case 'math':
         return [this.para(`<m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>${this.math(n.value, true, { size: cellSize })}</m:oMathPara>`, ctx, ctx.inTable ? 'TableText' : 'MathBlock', '', firstInItem)];
       case 'code': {

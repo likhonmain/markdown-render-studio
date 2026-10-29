@@ -34,6 +34,16 @@ function styleTree(root: HTMLElement, s: Settings): void {
   for (const sem of root.querySelectorAll('semantics')) sem.replaceWith(...sem.childNodes);
 
   // Structure clean-up.
+  for (const b of root.querySelectorAll<HTMLElement>('.blank-lines')) {
+    const n = Math.max(1, Number(b.dataset.lines ?? '1') || 1);
+    const ps = Array.from({ length: n }, () => {
+      const p = document.createElement('p');
+      p.style.cssText = 'margin:0;';
+      p.innerHTML = '&nbsp;';
+      return p;
+    });
+    b.replaceWith(...ps);
+  }
   for (const run of root.querySelectorAll('.li-run')) run.replaceWith(...run.childNodes);
   for (const wrap of root.querySelectorAll('.table-wrap')) wrap.replaceWith(...wrap.childNodes);
   for (const el of root.querySelectorAll('[data-shell], [data-cols]')) {
