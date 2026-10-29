@@ -12,7 +12,12 @@ import {
 import { copyRich, wordHtmlFromNodes, wrapClipboardHtml } from './wordcopy';
 import { PageEditor } from './editor';
 import { hydrateFigures, figData, picHeight } from './flow';
-import { croppedDataUrl } from './store';
+import {
+  buildSessionExport, croppedDataUrl, deleteSessionRecord, deriveSessionName, emptyDoc,
+  getActiveSessionId, getActiveSessionName, getSavedScrollRatio, importSessionJson, isSessionJson,
+  listSessions, loadSessionRecord, newSessionId, saveScrollRatio, saveSessionRecord,
+  setActiveSessionId, setActiveSessionName, type SessionRecord,
+} from './store';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -389,6 +394,7 @@ function scheduleRender(delay = 0): void {
 function commit(rerender = true): void {
   saveSettings(settings);
   syncUi();
+  void syncActiveSession();
   if (rerender) scheduleRender(30);
 }
 
@@ -633,9 +639,14 @@ function doPrint(): void {
 }
 
 function suggestedName(): string {
+  const custom = getActiveSessionName().trim();
+  if (custom) {
+    const clean = custom.replace(/[<>:"/|?*\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (clean) return clean.slice(0, 80);
+  }
   const m = /^\s*#{1,6}\s+(.+)$/m.exec(source.value) ?? /^\s*\*\*(.+?)\*\*/m.exec(source.value);
-  const base = (m?.[1] ?? 'document').replace(/[$*_`\\]/g, '').replace(/[<>:"/|?*\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return base.slice(0, 80) || 'document';
+  const base = (m?.[1] ?? deriveSessionName(source.value, editor?.doc ?? emptyDoc())).replace(/[$*_`\\]/g, '').replace(/[<>:"/|?*\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return (base && base !== 'Untitled session' ? base.slice(0, 80) : '') || 'document';
 }
 
 /* ------------------------------------------------------------------ */
@@ -748,6 +759,7 @@ function saveSource(): void {
   clearTimeout(saveTimer);
   saveTimer = 0;
   try { localStorage.setItem(SOURCE_KEY, source.value); } catch { /* ignore */ }
+  void syncActiveSession();
 }
 
 function onSourceChange(): void {
@@ -800,8 +812,14 @@ function initEditor(): void {
   $('btn-open').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', async () => {
     const f = fileInput.files?.[0];
-    if (f) setSource(await f.text());
     fileInput.value = '';
+    if (!f) return;
+    const text = await f.text();
+    if (isSessionJson(text)) {
+      await importSessionFromText(text);
+      return;
+    }
+    setSource(text);
   });
   // Drag & drop a file anywhere.
   window.addEventListener('dragover', (e) => e.preventDefault());
@@ -813,7 +831,12 @@ function initEditor(): void {
       if (editor) void editor.insertPictureFile(f);
       return;
     }
-    setSource(await f.text());
+    const text = await f.text();
+    if (isSessionJson(text)) {
+      await importSessionFromText(text);
+      return;
+    }
+    setSource(text);
   });
   window.addEventListener('pagehide', saveSource);
 
@@ -987,6 +1010,8 @@ function initMobile(): void {
   $('m-pdf').addEventListener('click', exportPdf);
   $('m-docx').addEventListener('click', () => void downloadDocx());
   $('m-wordcopy').addEventListener('click', () => void wordCopy());
+  $('m-session-export').addEventListener('click', () => void exportSession());
+  $('m-session-open').addEventListener('click', () => void openSessionDialog());
   $('m-goto-setup').addEventListener('click', () => setTab('setup'));
   // A fresh visit on a phone opens on the editor when empty, or preview when text is saved.
   tab = source.value.trim() ? 'preview' : 'edit';
@@ -998,6 +1023,305 @@ function initMobile(): void {
   });
   applyLayout();
   initPinchZoom();
+}
+
+/* ------------------------------------------------------------------ */
+/* Sessions (multi-session switcher, scroll memory & export/import)    */
+/* ------------------------------------------------------------------ */
+
+function currentScrollRatio(): number {
+  const max = scroller.scrollHeight - scroller.clientHeight;
+  return max > 0 ? Math.max(0, Math.min(1, scroller.scrollTop / max)) : getSavedScrollRatio();
+}
+
+function applyScrollRatio(r: number): void {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(r) ? r : 0));
+  saveScrollRatio(clamped);
+  const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  scroller.scrollTop = clamped * max;
+}
+
+function currentSessionRecord(): SessionRecord {
+  return {
+    id: getActiveSessionId(),
+    name: getActiveSessionName(),
+    updated: Date.now(),
+    markdown: source.value,
+    doc: editor ? structuredClone(editor.doc) : emptyDoc(),
+    settings: structuredClone(settings),
+    scrollRatio: currentScrollRatio(),
+  };
+}
+
+function updateSessionButtonLabel(): void {
+  const label = deriveSessionName(source.value, editor?.doc ?? emptyDoc(), getActiveSessionName());
+  const el = $('session-btn-label');
+  if (el) el.textContent = label === 'Untitled session' ? 'Sessions' : label.slice(0, 22);
+}
+
+async function syncActiveSession(): Promise<void> {
+  updateSessionButtonLabel();
+  await saveSessionRecord(currentSessionRecord());
+}
+
+async function flushCurrentSession(): Promise<SessionRecord> {
+  editor?.flushNow();
+  clearTimeout(saveTimer);
+  try { localStorage.setItem(SOURCE_KEY, source.value); } catch { /* ignore */ }
+  saveScrollRatio(currentScrollRatio());
+  const rec = currentSessionRecord();
+  await saveSessionRecord(rec);
+  return rec;
+}
+
+async function switchToSession(rec: SessionRecord): Promise<void> {
+  await flushCurrentSession();
+  setActiveSessionId(rec.id);
+  setActiveSessionName(rec.name ?? '');
+  source.value = rec.markdown ?? '';
+  try { localStorage.setItem(SOURCE_KEY, source.value); } catch { /* ignore */ }
+  updateStats();
+  settings = {
+    ...structuredClone(DEFAULTS),
+    ...(rec.settings ?? {}),
+    margins: { ...DEFAULTS.margins, ...(rec.settings?.margins ?? {}) },
+  };
+  saveSettings(settings);
+  syncUi();
+  if (editor) await editor.loadSessionDoc(rec.doc ?? emptyDoc());
+  saveScrollRatio(rec.scrollRatio ?? 0);
+  await saveSessionRecord(currentSessionRecord());
+  updateSessionButtonLabel();
+  render();
+  requestAnimationFrame(() => applyScrollRatio(rec.scrollRatio ?? 0));
+}
+
+async function startNewSession(): Promise<void> {
+  await flushCurrentSession();
+  const fresh: SessionRecord = {
+    id: newSessionId(),
+    name: '',
+    updated: Date.now(),
+    markdown: '',
+    doc: emptyDoc(),
+    settings: structuredClone(settings),
+    scrollRatio: 0,
+  };
+  await switchToSession(fresh);
+  $<HTMLDialogElement>('session-dialog').close();
+  toast('Started a new session — switch back anytime in Sessions');
+}
+
+async function exportSession(sessionId?: string): Promise<void> {
+  const cur = await flushCurrentSession();
+  const rec = sessionId && sessionId !== cur.id ? (await loadSessionRecord(sessionId)) ?? cur : cur;
+  try {
+    const data = await buildSessionExport(rec);
+    const slug = (data.name || 'session').replace(/[<>:"/|?*\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'session';
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${slug}.mdstudio.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Session exported (.mdstudio.json)');
+  } catch (err) {
+    console.error(err);
+    toast(`Session export failed: ${(err as Error).message}`, 'error', 4000);
+  }
+}
+
+async function importSessionFromText(text: string): Promise<void> {
+  try {
+    const cur = await flushCurrentSession();
+    const rec = await importSessionJson(text);
+    // Keep the current non-empty session separate if the imported file had the same ID.
+    const curHasWork = !!(cur.markdown.trim() || cur.doc.dirty || cur.doc.floats.length);
+    if (rec.id === cur.id && curHasWork) {
+      rec.id = newSessionId();
+      await saveSessionRecord(rec);
+    }
+    await switchToSession(rec);
+    const dlg = $<HTMLDialogElement>('session-dialog');
+    if (dlg.open) dlg.close();
+    if (isMobile()) setTab('preview');
+    toast(`Restored session "${deriveSessionName(rec.markdown, rec.doc, rec.name)}"`);
+  } catch (err) {
+    console.error(err);
+    toast(`Import failed: ${(err as Error).message}`, 'error', 4000);
+  }
+}
+
+async function renderSessionList(): Promise<void> {
+  const listEl = $('session-list');
+  const activeId = getActiveSessionId();
+  const items = await listSessions();
+  listEl.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'session-empty';
+    empty.textContent = 'No saved sessions yet.';
+    listEl.appendChild(empty);
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'session-item' + (item.id === activeId ? ' active' : '');
+    row.setAttribute('role', 'listitem');
+    const info = document.createElement('div');
+    info.className = 'session-info';
+    const titleRow = document.createElement('div');
+    titleRow.className = 'session-title-row';
+    const nameEl = document.createElement('b');
+    nameEl.className = 'session-item-name';
+    nameEl.textContent = item.name;
+    titleRow.appendChild(nameEl);
+    if (item.id === activeId) {
+      const b = document.createElement('span');
+      b.className = 'session-badge active';
+      b.textContent = 'Current';
+      titleRow.appendChild(b);
+    }
+    if (item.edited) {
+      const b = document.createElement('span');
+      b.className = 'session-badge';
+      b.textContent = 'Page edited';
+      titleRow.appendChild(b);
+    }
+    if (item.picCount > 0) {
+      const b = document.createElement('span');
+      b.className = 'session-badge';
+      b.textContent = `${item.picCount} pic${item.picCount === 1 ? '' : 's'}`;
+      titleRow.appendChild(b);
+    }
+    const meta = document.createElement('small');
+    meta.className = 'session-meta';
+    meta.textContent = `Updated ${new Date(item.updated).toLocaleString()}`;
+    info.append(titleRow, meta);
+
+    const acts = document.createElement('div');
+    acts.className = 'session-item-actions';
+    if (item.id !== activeId) {
+      const sw = document.createElement('button');
+      sw.type = 'button';
+      sw.className = 'tb-btn primary';
+      sw.dataset.sact = 'switch';
+      sw.dataset.sid = item.id;
+      sw.textContent = 'Switch';
+      acts.appendChild(sw);
+    }
+    const exp = document.createElement('button');
+    exp.type = 'button';
+    exp.className = 'tb-btn';
+    exp.dataset.sact = 'export';
+    exp.dataset.sid = item.id;
+    exp.textContent = 'Export';
+    acts.appendChild(exp);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'tb-btn danger';
+    del.dataset.sact = 'delete';
+    del.dataset.sid = item.id;
+    del.textContent = 'Delete';
+    acts.appendChild(del);
+
+    row.append(info, acts);
+    listEl.appendChild(row);
+  }
+}
+
+async function openSessionDialog(): Promise<void> {
+  await flushCurrentSession();
+  const nameInput = $<HTMLInputElement>('session-name');
+  nameInput.value = getActiveSessionName();
+  nameInput.placeholder = deriveSessionName(source.value, editor?.doc ?? emptyDoc(), '');
+  await renderSessionList();
+  const dlg = $<HTMLDialogElement>('session-dialog');
+  if (!dlg.open) dlg.showModal();
+}
+
+function initSessions(): void {
+  const dlg = $<HTMLDialogElement>('session-dialog');
+  const nameInput = $<HTMLInputElement>('session-name');
+  const fileIn = $<HTMLInputElement>('session-file-input');
+
+  $('btn-sessions').addEventListener('click', () => void openSessionDialog());
+  $('session-close').addEventListener('click', () => dlg.close());
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg) dlg.close();
+  });
+
+  nameInput.addEventListener('input', () => {
+    setActiveSessionName(nameInput.value);
+    void syncActiveSession().then(() => renderSessionList());
+  });
+
+  $('session-export').addEventListener('click', () => void exportSession());
+  $('session-import').addEventListener('click', () => fileIn.click());
+  fileIn.addEventListener('change', async () => {
+    const f = fileIn.files?.[0];
+    fileIn.value = '';
+    if (!f) return;
+    await importSessionFromText(await f.text());
+  });
+  $('session-new').addEventListener('click', () => void startNewSession());
+
+  $('session-list').addEventListener('click', async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-sact]');
+    if (!btn) return;
+    const act = btn.dataset.sact;
+    const sid = btn.dataset.sid!;
+    if (act === 'switch') {
+      const rec = await loadSessionRecord(sid);
+      if (!rec) return toast('Could not load that session', 'error');
+      await switchToSession(rec);
+      dlg.close();
+      toast(`Switched to "${deriveSessionName(rec.markdown, rec.doc, rec.name)}"`);
+    } else if (act === 'export') {
+      await exportSession(sid);
+    } else if (act === 'delete') {
+      if (!confirm('Delete this saved session from the browser?')) return;
+      const isCurrent = sid === getActiveSessionId();
+      await deleteSessionRecord(sid);
+      if (isCurrent) {
+        const remaining = await listSessions();
+        if (remaining.length > 0) {
+          const next = await loadSessionRecord(remaining[0].id);
+          if (next) await switchToSession(next);
+        } else {
+          setActiveSessionId(newSessionId());
+          setActiveSessionName('');
+          source.value = '';
+          saveSource();
+          updateStats();
+          if (editor) await editor.loadSessionDoc(emptyDoc());
+          await syncActiveSession();
+          render();
+        }
+      }
+      nameInput.value = getActiveSessionName();
+      await renderSessionList();
+      toast('Session deleted');
+    }
+  });
+
+  let scrollTimer = 0;
+  scroller.addEventListener('scroll', () => {
+    if (scroller.clientWidth === 0) return;
+    clearTimeout(scrollTimer);
+    scrollTimer = window.setTimeout(() => {
+      saveScrollRatio(currentScrollRatio());
+      void syncActiveSession();
+    }, 250);
+  }, { passive: true });
+
+  window.addEventListener('pagehide', () => {
+    saveScrollRatio(currentScrollRatio());
+    void syncActiveSession();
+  });
 }
 
 async function initPageEditor(): Promise<void> {
@@ -1016,6 +1340,7 @@ async function initPageEditor(): Promise<void> {
     toast,
     status: (m) => { $('status-msg').textContent = m; },
     isMobile,
+    onDocSaved: () => { void syncActiveSession(); },
   });
   try {
     await ed.init();
@@ -1025,6 +1350,7 @@ async function initPageEditor(): Promise<void> {
     return;
   }
   editor = ed;
+  await syncActiveSession();
   // Phones/tablets: while typing on the page, hide the tab bar to make room for the keyboard.
   stage.addEventListener('focusin', () => app.classList.add('typing'));
   stage.addEventListener('focusout', () => setTimeout(() => {
@@ -1038,8 +1364,10 @@ async function boot(): Promise<void> {
   initZoom();
   initEditor();
   initToolbar();
+  initSessions();
   initMobile();
   syncUi();
+  const initialScroll = getSavedScrollRatio();
   const editorReady = initPageEditor();
   // KaTeX metrics depend on its web fonts: wait for them before the first measurement.
   try {
@@ -1051,6 +1379,7 @@ async function boot(): Promise<void> {
   } catch { /* render anyway */ }
   await editorReady;
   render();
+  if (initialScroll > 0) requestAnimationFrame(() => applyScrollRatio(initialScroll));
   // Late-loading fonts (bold/italic variants) change metrics: re-render once more.
   document.fonts.addEventListener?.('loadingdone', () => scheduleRender(50));
 }

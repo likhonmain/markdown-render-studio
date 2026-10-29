@@ -36,6 +36,7 @@ export interface EditorDeps {
   toast(msg: string, kind?: 'ok' | 'error', ms?: number): void;
   status(msg: string): void;
   isMobile(): boolean;
+  onDocSaved?(): void;
 }
 
 interface Snap {
@@ -137,6 +138,26 @@ export class PageEditor {
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.flushNow(); });
   }
 
+  /** Switches the editor to a different session's document. */
+  async loadSessionDoc(doc: EditDoc): Promise<void> {
+    clearTimeout(this.idleTimer);
+    clearTimeout(this.saveTimer);
+    this.pending = false;
+    this.composing = false;
+    this.override = null;
+    this.markers = false;
+    this.sel = null;
+    this.savedRange = null;
+    this.doc = structuredClone(doc);
+    const ids = [...figureImageIds(this.doc.html), ...this.doc.floats.map((f) => f.img)];
+    await loadImages(ids);
+    this.undoStack = [];
+    this.redoStack = [];
+    this.current = this.state();
+    await saveDoc(this.doc);
+    this.updateBanner();
+  }
+
   /** The HTML the pages should show. */
   pageHtml(renderMd: (md: string) => string): string {
     if (this.override !== null) return this.override;
@@ -163,6 +184,7 @@ export class PageEditor {
   }
 
   bands(g: Geometry): (page: number) => Band[] {
+    for (const f of this.doc.floats) this.clampFloat(f);
     return (i) =>
       this.doc.floats
         .filter((f) => f.page === i && f.wrap === 'push')
@@ -177,6 +199,7 @@ export class PageEditor {
   decoratePages(pages: HTMLElement): void {
     const pageEls = [...pages.children].filter((e) => e.classList.contains('page')) as HTMLElement[];
     for (const f of this.doc.floats) {
+      this.clampFloat(f);
       const page = pageEls[f.page];
       if (page) page.appendChild(this.floatEl(f));
     }
@@ -322,6 +345,7 @@ export class PageEditor {
     clearTimeout(this.saveTimer);
     try {
       await saveDoc(this.doc);
+      this.d.onDocSaved?.();
       this.d.status(this.edited ? 'Page edits saved' : 'Saved');
     } catch (err) {
       console.error(err);
@@ -680,17 +704,36 @@ export class PageEditor {
   private restoreRange(): void {
     const sel = getSelection();
     if (!sel) return;
-    if (sel.rangeCount && this.d.host.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
-    const r = this.savedRange;
+    const hasInHost = sel.rangeCount > 0 && this.d.host.contains(sel.getRangeAt(0).commonAncestorContainer);
+    const r = hasInHost ? sel.getRangeAt(0).cloneRange() : this.savedRange;
     if (!r || !r.startContainer.isConnected || !this.d.host.contains(r.startContainer)) return;
-    this.d.host.focus({ preventScroll: true });
+    if (!this.hasFocus()) this.d.host.focus({ preventScroll: true });
     sel.removeAllRanges();
     sel.addRange(r);
   }
 
+  private selectBlockIfCollapsed(): boolean {
+    const sel = getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    if (!sel.isCollapsed) return true;
+    const n = sel.anchorNode;
+    const el = n ? (n.nodeType === Node.ELEMENT_NODE ? (n as Element) : n.parentElement) : null;
+    const blk = el?.closest('p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th');
+    if (!blk || !this.d.host.contains(blk) || !(blk.textContent ?? '').trim()) return false;
+    const r = document.createRange();
+    r.selectNodeContents(blk);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    this.savedRange = r.cloneRange();
+    return true;
+  }
+
   private exec(cmd: string, value?: string): void {
     this.restoreRange();
+    const css = cmd.startsWith('justify');
+    if (css) document.execCommand('styleWithCSS', false, 'true');
     document.execCommand(cmd, false, value);
+    if (css) document.execCommand('styleWithCSS', false, 'false');
     this.pending = true;
     this.scheduleIdle();
     this.updateBar();
@@ -698,6 +741,7 @@ export class PageEditor {
 
   private color(c: string, kind: 'fore' | 'back'): void {
     this.restoreRange();
+    this.selectBlockIfCollapsed();
     document.execCommand('styleWithCSS', false, 'true');
     document.execCommand(kind === 'fore' ? 'foreColor' : 'hiliteColor', false, c);
     document.execCommand('styleWithCSS', false, 'false');
@@ -709,8 +753,8 @@ export class PageEditor {
 
   private size(em: string): void {
     this.restoreRange();
-    const sel = getSelection();
-    if (!sel || !sel.rangeCount || sel.isCollapsed) return this.d.toast('Select some text first');
+    if (!this.selectBlockIfCollapsed()) return this.d.toast('Select some text first');
+    const sel = getSelection()!;
     document.execCommand('styleWithCSS', false, 'false');
     document.execCommand('fontSize', false, '7');
     const fonts = [...this.d.host.querySelectorAll('font[size="7"]')];
@@ -825,7 +869,7 @@ export class PageEditor {
         ${btn('crop', 'Crop the picture', `${svg(I.crop)}<span>Crop</span>`, 'wide')}
         ${btn('delete', 'Delete the picture', `${svg(I.trash)}<span>Delete</span>`, 'wide danger')}
         <span class="ed-tip" data-only="float">Drag to move · drag a corner to resize</span>
-        <span class="ed-tip" data-only="fig">Drag a corner to resize</span>
+        <span class="ed-tip" data-only="fig">Drag to move · drag a corner to resize</span>
       </div>`;
     // Keep the caret / selection in the page while using the toolbar.
     b.addEventListener('pointerdown', (e) => { if (!(e.target as Element).closest('select')) e.preventDefault(); });
@@ -1062,7 +1106,11 @@ export class PageEditor {
     if (handle && this.sel?.id === id) return this.startResize(e, pic, handle.dataset.h!);
     if (this.sel?.id === id || e.pointerType === 'mouse') {
       if (this.sel?.id !== id) this.select({ kind, id });
-      if (kind === 'float') this.startDrag(e, this.selEl()!);
+      const active = this.selEl();
+      if (active) {
+        if (kind === 'float') this.startDrag(e, active);
+        else this.startFigDrag(e, active);
+      }
       return;
     }
     // Touch: select on a tap; a swipe keeps scrolling the page.
@@ -1130,6 +1178,72 @@ export class PageEditor {
     el.addEventListener('pointercancel', up);
   }
 
+  private startFigDrag(e: PointerEvent, fig: HTMLElement): void {
+    const page = fig.closest<HTMLElement>('.page');
+    const z = this.d.zoom();
+    const sx = e.clientX;
+    const sy = e.clientY;
+    let moved = false;
+    fig.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      const dx = (ev.clientX - sx) / z;
+      const dy = (ev.clientY - sy) / z;
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+      if (!moved) {
+        moved = true;
+        page?.classList.add('drag-host');
+        fig.classList.add('dragging');
+      }
+      fig.style.transform = `translate(${dx}px, ${dy}px)`;
+      this.autoScroll(ev.clientY);
+    };
+    const up = (ev: PointerEvent) => {
+      fig.removeEventListener('pointermove', move);
+      fig.removeEventListener('pointerup', up);
+      fig.removeEventListener('pointercancel', up);
+      if (!moved) return;
+      fig.style.transform = '';
+      page?.classList.remove('drag-host');
+      fig.classList.remove('dragging');
+      if (this.pagesView) {
+        const g = geometry(this.d.settings());
+        const pages = [...(this.d.pages()?.querySelectorAll<HTMLElement>(':scope > .page') ?? [])];
+        let best = 0;
+        let bestD = Infinity;
+        pages.forEach((p, i) => {
+          const r = p.getBoundingClientRect();
+          const dist = ev.clientY < r.top ? r.top - ev.clientY : ev.clientY > r.bottom ? ev.clientY - r.bottom : 0;
+          if (dist < bestD) { bestD = dist; best = i; }
+        });
+        const pc = pages[best]?.querySelector<HTMLElement>(':scope > .page-content');
+        if (pc) {
+          const pr = pages[best].getBoundingClientRect();
+          insertAtY(pc, fig, (ev.clientY - pr.top) / z - g.mt * MM_PX);
+        }
+      } else {
+        const md = this.d.flowMd();
+        if (md) {
+          let placed = false;
+          for (const c of [...md.children] as HTMLElement[]) {
+            if (c === fig) continue;
+            const r = c.getBoundingClientRect();
+            if (r.top + r.height / 2 >= ev.clientY) {
+              c.before(fig);
+              placed = true;
+              break;
+            }
+          }
+          if (!placed) md.appendChild(fig);
+        }
+      }
+      this.pending = true;
+      this.commitDoc();
+    };
+    fig.addEventListener('pointermove', move);
+    fig.addEventListener('pointerup', up);
+    fig.addEventListener('pointercancel', up);
+  }
+
   private autoScroll(clientY: number): void {
     const r = this.d.scroller.getBoundingClientRect();
     const edge = 40;
@@ -1150,7 +1264,9 @@ export class PageEditor {
   private clampFloat(f: FloatImg): void {
     const g = geometry(this.d.settings());
     f.w = clamp(f.w, 5, g.pageW);
-    const h = picHeight(f);
+    const ratio = picHeight({ ...f, w: 1 });
+    if (f.w * ratio > g.pageH) f.w = Math.max(5, g.pageH / ratio);
+    const h = f.w * ratio;
     f.x = clamp(f.x, 0, Math.max(0, g.pageW - f.w));
     f.y = clamp(f.y, 0, Math.max(0, g.pageH - h));
   }

@@ -20,6 +20,19 @@ The renderer copies the DeepSeek Harness chat renderer: the same Markdown parser
   `$inline$`, `$$display$$` (also on a single line, even inside list items), `\(inline\)` and `\[display\]`.
 - If an equation has a TeX error, it still renders leniently instead of breaking the page.
 
+### Direct page editing (WYSIWYG) & pictures
+- **Edit right on the rendered page**: type, select, delete, or press Enter to add spacing directly on the paginated preview (or Flow view) on phone, tablet, and desktop.
+- **Formatting toolbar**: bold, italic, underline, strikethrough, text colour & highlight palette, text size, paragraph styles (Normal, H1–H4, Quote, Code), alignment, bulleted & numbered lists, page breaks, clear formatting, and 150-step Undo/Redo.
+- **Pictures with non-destructive crop & corner resize**:
+  - Insert pictures from the toolbar, paste, or drag-and-drop; crop on insert or re-crop at any time with aspect-ratio presets (Free, Original, 1:1, 4:3, 3:4, 16:9).
+  - **Fixed on page** (default): stays anchored at its exact spot on that page even when text above it changes; pushes text above and below it (*Push text*) like Microsoft Word, or floats *In front* of text. Drag anywhere (even across pages) with centre/margin snapping.
+  - **In line with text**: moves with the surrounding text; supports left, centre, right, and left/right text wrapping.
+  - Drag any corner handle to resize while preserving aspect ratio.
+- **Crash-safe browser autosave & Sessions**:
+  - All Markdown, page edits, colours, pictures, crops, page setup settings, and your exact scroll position are saved automatically in IndexedDB with a synchronous `localStorage` mirror, surviving refreshes, tab closes, or browser crashes.
+  - **Multi-session switcher**: start a new session or switch between multiple saved sessions right in the browser without losing any work.
+  - **Export & Import session (`.mdstudio.json`)**: export your entire session (including all embedded pictures, crops, formatting, and settings) as a single `.mdstudio.json` file and import it anytime to pick up right where you left off.
+
 ### Live page preview and PDF export
 - **Pages view** shows exactly what the PDF will contain, updating as you type.
 - Real pagination: text flows to the next page **line by line**, lists continue across pages, long tables split between rows and **repeat their header row** on every page. Headings and bold lead-in lines (e.g. `**Applications:**`) are never left stranded at the bottom of a page.
@@ -103,16 +116,20 @@ The build is a plain static site and asset paths are relative (`base: './'`), so
 index.html            App shell (toolbar, editor, preview, page setup)
 src/
   main.ts             UI controller: rendering, zoom, auto-fit, print, exports
+  editor.ts           Direct page editor: toolbar, formatting, undo/redo, picture manipulation
+  flow.ts             Paginated DOM <-> document flow, caret markers, picture & paste helpers
+  store.ts            IndexedDB + localStorage autosave and picture store
+  crop.ts             Interactive pointer/touch crop dialog
   markdown.ts         Markdown → HTML (GFM, math-delimiter normalisation, KaTeX)
-  paginate.ts         Paginator: splits content between lines, list items and table rows
+  paginate.ts         Paginator: splits content between lines, list items, table rows & picture bands
   wordcopy.ts         Word-ready clipboard HTML (MathML equations, inline styles)
-  docx.ts             Native .docx writer (lists, tables, styles, page setup)
+  docx.ts             Native .docx writer (Markdown AST & edited DOM, lists, tables, pictures, OMML)
   omml.ts             MathML → Office Math (OMML) converter for Word equations
   settings.ts         Paper sizes, margin presets, fonts, persisted settings
   sample.md           Built-in sample document
   styles/
     markdown.css      DeepSeek-Harness-style typography
-    app.css           Application UI
+    app.css           Application & page-editor UI
     print.css         Print / PDF rules
 ```
 

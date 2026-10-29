@@ -171,8 +171,9 @@ dialog ol { padding-left: 20px; margin: 10px 0 14px; }
 #app.mobile .topbar { height: 48px; gap: 6px; padding: 0 8px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
 #app.mobile .brand { margin-right: auto; }
 #app.mobile .brand-name { display: inline; font-size: 14px; }
-#app.mobile .topbar > .tb-group:not(.zoom):not(.seg),
+#app.mobile .topbar > .tb-group:not(.zoom):not(.seg):not(.sessions),
 #app.mobile .topbar > .spacer { display: none; }
+#app.mobile .topbar > .sessions { display: flex; }
 #app.mobile .topbar > .seg,
 #app.mobile .topbar > .zoom { display: none; }
 #app.mobile[data-tab="preview"] .topbar > .seg,
@@ -326,6 +327,12 @@ dialog ol { padding-left: 20px; margin: 10px 0 14px; }
 .ed-banner-actions .tb-btn { height: 30px; }
 
 /* editable surface */
+.preview-stage.has-floats-hidden::before {
+  content: "Fixed page pictures are hidden in Flow view — switch to Pages view to see or move them.";
+  display: block; max-width: 920px; margin: 0 auto 12px; padding: 8px 12px; border-radius: 8px;
+  background: #eef2ff; border: 1px solid #c9d5ff; color: #1d3fcc; font-size: 12.5px; text-align: center;
+  user-select: none; -webkit-user-select: none; pointer-events: none;
+}
 .preview-stage[contenteditable="true"] { outline: none; caret-color: var(--accent); }
 .preview-stage[contenteditable="true"] .page { cursor: text; }
 .preview-stage[contenteditable="true"] .page-content { outline: 1px dashed transparent; }
@@ -348,9 +355,9 @@ dialog ol { padding-left: 20px; margin: 10px 0 14px; }
 .fimg .ed-crop { display: block; position: relative; overflow: hidden; width: 100%; line-height: 0; }
 .fimg.front { z-index: 3; }
 .preview-stage[contenteditable="true"] .fimg, .preview-stage[contenteditable="true"] figure.ed-fig { cursor: pointer; }
-.preview-stage[contenteditable="true"] .fimg.sel { cursor: move; touch-action: none; }
+.preview-stage[contenteditable="true"] .fimg.sel, .preview-stage[contenteditable="true"] figure.ed-fig.sel { cursor: move; touch-action: none; }
 .sel { outline: calc(2px * var(--iz, 1)) solid var(--accent) !important; outline-offset: 1px; }
-.fimg.dragging { opacity: .85; z-index: 10; }
+.fimg.dragging, figure.ed-fig.dragging { opacity: .85; z-index: 10; }
 .ed-h {
   position: absolute; width: calc(16px * var(--iz, 1)); height: calc(16px * var(--iz, 1)); background: #fff; border: calc(2px * var(--iz, 1)) solid var(--accent);
   border-radius: 50%; z-index: 5; touch-action: none; box-sizing: border-box;
@@ -410,3 +417,34 @@ dialog ol { padding-left: 20px; margin: 10px 0 14px; }
   .ed-h-sw { left: calc(-11px * var(--iz, 1)); bottom: calc(-11px * var(--iz, 1)); }
   .ed-h-se { right: calc(-11px * var(--iz, 1)); bottom: calc(-11px * var(--iz, 1)); }
 }
+
+/* sessions dialog */
+.tb-btn.danger { color: var(--danger); border-color: #fecdca; }
+.tb-btn.danger:hover { background: #fef3f2; }
+.session-dialog { width: min(560px, 95vw); max-height: 90dvh; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.session-dialog:not([open]) { display: none; }
+.session-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.session-head h2 { margin: 0; font-size: 16px; }
+.session-sub { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.session-sub code { background: #f1f2f4; padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+.session-current { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f9fafb; }
+.session-name-label { display: flex; flex-direction: column; gap: 5px; font-weight: 600; font-size: 12px; color: var(--muted); }
+.session-name-label input { height: 34px; border: 1px solid var(--line-2); border-radius: 7px; padding: 0 10px; background: #fff; font-weight: 500; font-size: 13.5px; color: var(--text); }
+.session-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.session-actions .tb-btn span { display: inline !important; }
+.session-list-head { font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: 2px; }
+.session-list { flex: 1; min-height: 80px; max-height: 42dvh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+.session-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.session-item.active { border-color: #b9c8ff; background: #f5f8ff; }
+.session-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.session-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.session-item-name { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.session-badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #eef0f3; color: var(--muted); font-weight: 500; }
+.session-badge.active { background: var(--accent); color: #fff; }
+.session-meta { color: var(--faint); font-size: 11.5px; }
+.session-item-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; }
+.session-empty { color: var(--faint); font-size: 12.5px; padding: 12px 4px; text-align: center; }
+#app.mobile .session-name-label input { height: 40px; font-size: 16px; }
+#app.mobile .session-item { flex-direction: column; align-items: stretch; }
+#app.mobile .session-item-actions { justify-content: flex-end; }
+#app.mobile .session-actions .tb-btn, #app.mobile .session-item-actions .tb-btn { height: 38px; padding: 0 12px; }

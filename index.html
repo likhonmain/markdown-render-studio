@@ -22,6 +22,12 @@
           </button>
         </div>
 
+        <div class="tb-group sessions" role="group" aria-label="Sessions">
+          <button class="tb-btn" id="btn-sessions" title="Sessions: switch workspace, start a new session, or export/import a session file">
+            <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg><span id="session-btn-label">Sessions</span>
+          </button>
+        </div>
+
         <div class="tb-group seg" role="group" aria-label="View">
           <button class="seg-btn" id="view-pages" title="Paginated print preview (what the PDF will look like)">Pages</button>
           <button class="seg-btn" id="view-flow" title="Continuous view that reflows to the window width">Flow</button>
@@ -74,7 +80,7 @@
               <button class="mini-btn" id="btn-open" title="Open a .md / .txt file">Open</button>
               <button class="mini-btn" id="btn-sample" title="Load the sample document">Sample</button>
               <button class="mini-btn" id="btn-clear" title="Clear the editor">Clear</button>
-              <input type="file" id="file-input" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
+              <input type="file" id="file-input" accept=".md,.markdown,.txt,.json,.mdstudio,text/markdown,text/plain,application/json" hidden />
             </div>
           </div>
           <textarea id="source" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Paste raw Markdown from Google AI Studio, ChatGPT, DeepSeek… (bold, lists, tables, $LaTeX$ and $$display math$$ are all supported)"></textarea>
@@ -196,6 +202,14 @@
               <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
               <span><b>Word copy</b><small>Copies the whole document — paste it into Word.</small></span>
             </button>
+            <button class="export-card" id="m-session-export">
+              <svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><path d="M17 21v-8H7v8M7 3v5h8" /></svg>
+              <span><b>Export session (.mdstudio.json)</b><small>Saves everything — Markdown, page edits, colours, pictures, crops &amp; page setup — into one file to import later.</small></span>
+            </button>
+            <button class="export-card" id="m-session-open">
+              <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+              <span><b>Sessions &amp; Import</b><small>Switch between saved sessions in this browser, start a new session, or import a .mdstudio.json session file.</small></span>
+            </button>
             <div class="export-summary">
               <span id="m-export-summary"></span>
               <button class="mini-btn" id="m-goto-setup">Change in Setup</button>
@@ -232,6 +246,33 @@
           <button value="ok" class="tb-btn primary" id="pdf-go">Open print dialog</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="session-dialog" class="session-dialog">
+      <div class="session-head">
+        <h2>Sessions &amp; Project Backup</h2>
+        <button type="button" class="mini-btn" id="session-close" title="Close">✕</button>
+      </div>
+      <p class="session-sub">Your work (Markdown, page edits, colours, pictures, crops, page setup and scroll spot) is saved automatically in this browser. Switch between sessions below, or export/import a <code>.mdstudio.json</code> session file.</p>
+      <div class="session-current">
+        <label class="session-name-label">Current session
+          <input type="text" id="session-name" placeholder="Session name (auto-named from heading)" maxlength="80" />
+        </label>
+        <div class="session-actions">
+          <button type="button" class="tb-btn primary" id="session-export" title="Download this session (.mdstudio.json) with all pictures and edits">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14" /></svg><span>Export session</span>
+          </button>
+          <button type="button" class="tb-btn" id="session-import" title="Import a .mdstudio.json session file">
+            <svg viewBox="0 0 24 24"><path d="M12 15V3m0 0-4 4m4-4 4 4M5 21h14" /></svg><span>Import file…</span>
+          </button>
+          <button type="button" class="tb-btn" id="session-new" title="Save current work and start a new blank session">
+            <svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14" /></svg><span>New session</span>
+          </button>
+        </div>
+      </div>
+      <div class="session-list-head">Saved in this browser</div>
+      <div class="session-list" id="session-list" role="list"></div>
+      <input type="file" id="session-file-input" accept=".json,.mdstudio,application/json,text/plain" hidden />
     </dialog>
 
     <script type="module" src="/src/main.ts"></script>

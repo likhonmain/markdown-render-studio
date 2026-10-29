@@ -1,4 +1,4 @@
-﻿import { defineConfig } from 'vite';
+import { defineConfig } from 'vite';
 
 // `base: './'` keeps every asset URL relative, so the `dist/` folder works on
 // GitHub Pages project sites, Cloudflare Pages, or opened from any sub-path.
@@ -8,5 +8,9 @@ export default defineConfig({
     target: 'es2022',
     chunkSizeWarningLimit: 1500,
   },
-  server: { port: 5178, strictPort: false },
+  server: {
+    host: true,
+    port: 5178,
+    strictPort: false,
+  },
 });
