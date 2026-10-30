@@ -448,3 +448,35 @@ dialog ol { padding-left: 20px; margin: 10px 0 14px; }
 #app.mobile .session-item { flex-direction: column; align-items: stretch; }
 #app.mobile .session-item-actions { justify-content: flex-end; }
 #app.mobile .session-actions .tb-btn, #app.mobile .session-item-actions .tb-btn { height: 38px; padding: 0 12px; }
+
+/* ---- Ink (pen / highlighter / eraser) ---- */
+.ink-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; overflow: visible; }
+.ink-layer .ink-hl { mix-blend-mode: multiply; opacity: .45; }
+.preview-stage.ink-mode, .preview-stage.ink-mode .page { touch-action: none; cursor: crosshair; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.preview-stage.ink-mode[data-ink-tool="eraser"] .page { cursor: cell; }
+.preview-stage.ink-mode .page-content { caret-color: transparent; }
+.ink-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #1d3fcc; box-shadow: 0 0 0 1px rgba(0,0,0,.2); }
+.ed-btn.ink[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.ink-pop { min-width: 220px; }
+.ink-pop-title { font-weight: 600; font-size: 12px; color: var(--muted); }
+.ed-sw.on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--accent); }
+.ink-widths { display: flex; gap: 6px; }
+.ink-w { flex: 1; height: 32px; border: 1px solid var(--line-2); border-radius: 7px; background: #fff; display: grid; place-items: center; cursor: pointer; padding: 0 6px; }
+.ink-w i { display: block; width: 100%; border-radius: 4px; }
+.ink-w.on { border-color: var(--accent); background: var(--accent-soft); }
+.ink-pop-row { display: flex; justify-content: flex-end; }
+.md-sync-note { flex: none; padding: 6px 14px; font-size: 11.5px; color: #8a5a00; background: #fff8e6; border-top: 1px solid #f5d98b; }
+.md-sync-note[hidden] { display: none; }
+/* compact edit bar so the whole row fits on a tablet */
+.edit-bar .ed-btn { min-width: 30px; height: 30px; padding: 0 5px; }
+.edit-bar .ed-btn.txt { width: 30px; font-size: 14px; }
+.edit-bar .ed-btn svg { width: 15px; height: 15px; }
+.edit-bar .ed-sel { height: 30px; max-width: 110px; font-size: 12.5px; }
+.edit-bar .ed-sel.narrow { max-width: 74px; }
+.edit-bar .ed-sep { margin: 0 2px; }
+.edit-bar .ed-row { gap: 2px; padding: 4px 6px; min-height: 38px; }
+#app.mobile .edit-bar .ed-btn { min-width: 36px; height: 36px; }
+#app.mobile .edit-bar .ed-btn.txt { width: 36px; font-size: 16px; }
+#app.mobile .edit-bar .ed-sel { height: 36px; font-size: 14px; }
+#app.mobile .edit-bar .ed-row { min-height: 44px; }
+@media print { .ink-layer { display: block !important; } .ink-layer .ink-hl { mix-blend-mode: multiply; } }

@@ -172,10 +172,58 @@ export function preprocess(src: string): string {
 /* mdast                                                               */
 /* ------------------------------------------------------------------ */
 
+// Inline formatting tags the page editor writes back into the Markdown. Anything
+// else in raw HTML stays literal text (AI answers often contain stray `<tags>`).
+const INLINE_OPEN = /^<(span|u|mark|sub|sup)(\s+style="([^"<>]*)")?\s*>$/i;
+const INLINE_CLOSE = /^<\/(span|u|mark|sub|sup)\s*>$/i;
+const SAFE_STYLE = /^(?:\s*(?:color|background-color|font-size)\s*:\s*[#\w(),.%\s-]+;?)+$/i;
+
+/** Pairs inline open/close html nodes inside one phrasing parent into real elements. */
+function pairInlineTags(p: MdParent): void {
+  const kids = p.children as unknown as Array<{ type: string; value?: string; children?: unknown[]; data?: unknown }>;
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i];
+    if (k.type !== 'html') continue;
+    const m = INLINE_OPEN.exec((k.value ?? '').trim());
+    if (!m) continue;
+    const tag = m[1].toLowerCase();
+    const style = m[3] ?? '';
+    if (tag === 'span' && (!style || !SAFE_STYLE.test(style))) continue;
+    // Find the matching close tag at the same level (nesting-aware).
+    let depth = 0;
+    let j = i + 1;
+    for (; j < kids.length; j++) {
+      const v = kids[j].type === 'html' ? (kids[j].value ?? '').trim() : '';
+      if (!v) continue;
+      const o = INLINE_OPEN.exec(v);
+      if (o && o[1].toLowerCase() === tag) depth++;
+      const c = INLINE_CLOSE.exec(v);
+      if (c && c[1].toLowerCase() === tag) {
+        if (depth === 0) break;
+        depth--;
+      }
+    }
+    if (j >= kids.length) continue;
+    const inner = kids.slice(i + 1, j);
+    const node = {
+      type: 'mdInline',
+      children: inner,
+      data: { hName: tag, hProperties: style ? { style: style.trim() } : {} },
+    };
+    pairInlineTags(node as unknown as MdParent);
+    kids.splice(i, j - i + 1, node);
+  }
+}
+
 /** `<br>` becomes a hard break; page-break markers become page breaks; other raw HTML stays literal text. */
 function remarkHtmlAsText() {
   const pageBreak = () => ({ type: 'thematicBreak', data: { hProperties: { className: ['page-break'] }, pageBreak: true } });
   return (tree: MdRoot) => {
+    // Inline formatting tags first, inside every parent that holds phrasing content.
+    visit(tree, (node) => {
+      const n = node as unknown as MdParent;
+      if (Array.isArray(n.children) && n.children.some((c) => c.type === 'html')) pairInlineTags(n);
+    });
     visit(tree, 'html', (node, index, parent) => {
       if (!parent || index === undefined) return undefined;
       const p = parent as MdParent;
@@ -187,6 +235,31 @@ function remarkHtmlAsText() {
       if (/^<!--\s*(page-?break|new-?page)\s*-->$/i.test(v) || /^<div\s+style=["']\s*page-break-(before|after)\s*:\s*always;?\s*["']\s*>\s*<\/div>$/i.test(v)) {
         (p.children as unknown[])[index] = pageBreak();
         return undefined;
+      }
+      const pic = /^<!--\s*picture\s+(\{[\s\S]*\})\s*-->$/.exec(v);
+      if (pic && (p.type === 'root' || p.type === 'listItem' || p.type === 'blockquote')) {
+        try {
+          const d = JSON.parse(pic[1]) as Record<string, unknown>;
+          const str = (x: unknown, re: RegExp, dflt: string) => (typeof x === 'string' && re.test(x) ? x : dflt);
+          (p.children as unknown[])[index] = {
+            type: 'paragraph',
+            children: [],
+            data: {
+              hName: 'figure',
+              hProperties: {
+                className: ['ed-fig'],
+                dataId: str(d.id, /^[\w-]{1,40}$/, `g${index}`),
+                dataImg: str(d.img, /^[\w-]{1,40}$/, ''),
+                dataNw: Number(d.nw) || 1,
+                dataNh: Number(d.nh) || 1,
+                dataCrop: str(d.crop, /^[\d.,]+$/, '0,0,1,1'),
+                dataW: Number(d.w) || 60,
+                dataAlign: str(d.align, /^(left|center|right|float-left|float-right)$/, 'center'),
+              },
+            },
+          };
+          return undefined;
+        } catch { /* fall through: drop as a comment */ }
       }
       const blank = /^<!--\s*blank-lines:(\d+)\s*-->$/.exec(v);
       if (blank && (p.type === 'root' || p.type === 'listItem' || p.type === 'blockquote')) {

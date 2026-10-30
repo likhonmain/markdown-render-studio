@@ -329,16 +329,32 @@ function render(keepAbsolute = false): void {
     updateStatus();
     return;
   }
+  const noScroll = editor?.takeNoScroll() ?? false;
+  const keepTop = scroller.scrollTop;
+  const keepLeft = scroller.scrollLeft;
   editor?.prepareRender();
   if (settings.view === 'flow') renderFlow();
   else renderPages(keepAbsolute || !!editor?.enabled);
   editor?.afterRender();
-  if (editor?.enabled) keepCaretVisible();
+  if (noScroll) {
+    scroller.scrollTop = keepTop;
+    scroller.scrollLeft = keepLeft;
+  } else if (editor?.enabled) keepCaretVisible();
   updateStatus();
+  updateLossyNote();
 }
 
-/** After a re-layout, scroll just enough to keep the caret on screen. */
+function updateLossyNote(): void {
+  const el = document.getElementById('md-sync-note');
+  if (!el) return;
+  const note = editor?.lossyNote ?? '';
+  el.textContent = note;
+  el.hidden = !note;
+}
+
+/** After a re-layout, scroll just enough to keep the caret on screen (only while typing on the page). */
 function keepCaretVisible(): void {
+  if (!stage.contains(document.activeElement) && document.activeElement !== stage) return;
   const sel = getSelection();
   if (!sel || !sel.rangeCount || !stage.contains(sel.anchorNode)) return;
   const r = sel.getRangeAt(0);
@@ -615,6 +631,7 @@ function buildPagesForPrint(): HTMLElement {
   for (const el of clone.querySelectorAll('.ed-ui')) el.remove();
   for (const el of clone.querySelectorAll('.sel')) el.classList.remove('sel');
   for (const el of clone.querySelectorAll('[contenteditable]')) el.removeAttribute('contenteditable');
+  for (const el of clone.querySelectorAll('.ink-layer g:empty')) el.remove();
   return clone;
 }
 
@@ -1337,6 +1354,17 @@ async function initPageEditor(): Promise<void> {
     zoom: () => lastZoom,
     rerender: () => render(true),
     markdown: () => source.value,
+    setMarkdown: (md: string) => {
+      if (source.value === md) return;
+      // Keep the textarea's own scroll position; the user may be looking at it.
+      const top = source.scrollTop;
+      source.value = md;
+      source.scrollTop = top;
+      htmlFor = '\u0000';
+      updateStats();
+      clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(saveSource, 400);
+    },
     toast,
     status: (m) => { $('status-msg').textContent = m; },
     isMobile,

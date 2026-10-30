@@ -3,6 +3,7 @@
 // IndexedDB holds everything; a synchronous localStorage mirror of the active
 // session (without picture blobs) survives even a crash before async writes finish.
 import type { Settings } from './settings';
+import type { InkStroke } from './ink';
 
 /** Crop rectangle as fractions of the original picture: x, y, width, height. */
 export type Crop = [number, number, number, number];
@@ -24,8 +25,10 @@ export interface EditDoc {
   v: 1;
   dirty: boolean; // the page has been edited: `html` is the source of truth
   html: string; // the document flow (unpaginated)
-  mdBase: string; // the Markdown the page edits started from
+  mdBase: string; // the Markdown mirror of the page (kept in sync with page edits)
+  mdOrig?: string; // the Markdown before the first page edit (for "Discard page edits")
   floats: FloatImg[];
+  ink?: InkStroke[]; // pen / highlighter strokes, anchored to pages
   updated: number;
 }
 
@@ -66,7 +69,7 @@ export interface SessionExportFile {
   images: Record<string, SessionExportImage>;
 }
 
-export const emptyDoc = (): EditDoc => ({ v: 1, dirty: false, html: '', mdBase: '', floats: [], updated: 0 });
+export const emptyDoc = (): EditDoc => ({ v: 1, dirty: false, html: '', mdBase: '', floats: [], ink: [], updated: 0 });
 
 const DB_NAME = 'mdstudio';
 const LS_KEY = 'mdstudio.doc.v1';
@@ -266,6 +269,7 @@ export async function gcImages(keep: Set<string>): Promise<void> {
       if (r?.doc && valid(r.doc)) {
         for (const id of docImageIds(r.doc)) allKeep.add(id);
       }
+      for (const m of (r?.markdown ?? '').matchAll(/"img":"([\w-]+)"/g)) allKeep.add(m[1]);
     }
     const s = await store('images', 'readwrite');
     const imgKeys = (await req(s.getAllKeys())) as string[];
@@ -356,7 +360,7 @@ function metaOf(r: SessionRecord): SessionMeta {
     id: r.id,
     name: deriveSessionName(r.markdown, r.doc, r.name),
     updated: r.updated || Date.now(),
-    edited: !!(r.doc.dirty || r.doc.floats.length > 0),
+    edited: !!(r.doc.dirty || r.doc.floats.length > 0 || (r.doc.ink?.length ?? 0) > 0),
     picCount: pics,
   };
 }
@@ -422,7 +426,7 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 
 /** Packages a complete session (Markdown, page edits, settings, scroll, and all pictures) for export. */
 export async function buildSessionExport(rec: SessionRecord): Promise<SessionExportFile> {
-  const ids = docImageIds(rec.doc);
+  const ids = [...new Set([...docImageIds(rec.doc), ...[...rec.markdown.matchAll(/"img":"([\w-]+)"/g)].map((m) => m[1])])];
   await loadImages(ids);
   const images: Record<string, SessionExportImage> = {};
   for (const id of ids) {
@@ -475,7 +479,9 @@ export async function importSessionJson(text: string): Promise<SessionRecord> {
     dirty: !!parsed.doc.dirty,
     html: String(parsed.doc.html ?? ''),
     mdBase: String(parsed.doc.mdBase ?? ''),
+    mdOrig: typeof parsed.doc.mdOrig === 'string' ? parsed.doc.mdOrig : undefined,
     floats: Array.isArray(parsed.doc.floats) ? parsed.doc.floats : [],
+    ink: Array.isArray(parsed.doc.ink) ? parsed.doc.ink : [],
     updated: Date.now(),
   };
   const rec: SessionRecord = {

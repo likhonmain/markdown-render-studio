@@ -8,7 +8,7 @@ const CARET = 'data-caret';
 /* Paginated pages → document flow                                     */
 /* ------------------------------------------------------------------ */
 
-const CHROME = '.page-num, .page-label, .fimg, .ed-ui, .ex-spacer';
+const CHROME = '.page-num, .page-label, .fimg, .ed-ui, .ex-spacer, .ink-layer';
 
 function lastNode(target: Node): Node | null {
   for (let n = target.lastChild; n; n = n.previousSibling) {
