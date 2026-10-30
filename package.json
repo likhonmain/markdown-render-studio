@@ -1,34 +1,35 @@
 {
-    "name":  "md-render-studio",
-    "version":  "1.0.0",
-    "description":  "Paste raw AI Markdown (bold, lists, tables, LaTeX math) and get a faithful render, paginated PDF export, Word copy and .docx download.",
-    "private":  true,
-    "type":  "module",
-    "license":  "MIT",
-    "homepage":  "https://likhonmain.github.io/markdown-render-studio/",
-    "repository":  "https://github.com/likhonmain/markdown-render-studio",
-    "scripts":  {
-                    "dev":  "vite",
-                    "build":  "tsc --noEmit \u0026\u0026 vite build",
-                    "preview":  "vite preview",
-                    "deploy":  "npm run build \u0026\u0026 gh-pages -d dist --nojekyll -m \"Deploy to GitHub Pages\""
-                },
-    "dependencies":  {
-                         "jszip":  "^3.10.2",
-                         "katex":  "^0.16.47",
-                         "rehype-stringify":  "^10.0.1",
-                         "remark-gfm":  "^4.0.1",
-                         "remark-math":  "^6.0.0",
-                         "remark-parse":  "^11.0.0",
-                         "remark-rehype":  "^11.1.2",
-                         "unified":  "^11.0.5",
-                         "unist-util-visit":  "^5.1.0"
-                     },
-    "devDependencies":  {
-                            "@types/hast":  "^3.0.5",
-                            "@types/mdast":  "^4.0.4",
-                            "gh-pages":  "^6.3.0",
-                            "typescript":  "^5.9.3",
-                            "vite":  "^8.3.5"
-                        }
+    "name": "md-render-studio",
+    "version": "1.0.0",
+    "description": "Paste raw AI Markdown (bold, lists, tables, LaTeX math) and get a faithful render, paginated PDF export, Word copy and .docx download.",
+    "private": true,
+    "type": "module",
+    "license": "MIT",
+    "homepage": "https://likhonmain.github.io/markdown-render-studio/",
+    "repository": "https://github.com/likhonmain/markdown-render-studio",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc --noEmit && vite build",
+        "preview": "vite preview",
+        "deploy": "npm run build && gh-pages -d dist --nojekyll -m \"Deploy to GitHub Pages\""
+    },
+    "dependencies": {
+        "jszip": "^3.10.2",
+        "katex": "^0.16.47",
+        "rehype-stringify": "^10.0.1",
+        "remark-gfm": "^4.0.1",
+        "remark-math": "^6.0.0",
+        "remark-parse": "^11.0.0",
+        "remark-rehype": "^11.1.2",
+        "unified": "^11.0.5",
+        "unist-util-visit": "^5.1.0"
+    },
+    "devDependencies": {
+        "@types/hast": "^3.0.5",
+        "@types/mdast": "^4.0.4",
+        "gh-pages": "^6.3.0",
+        "typescript": "^5.9.3",
+        "vite": "^8.3.5",
+        "wrangler": "^4.156.0"
+    }
 }
