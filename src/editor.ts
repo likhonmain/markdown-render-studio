@@ -22,8 +22,8 @@ import {
 import { openCrop } from './crop';
 import { htmlToMarkdown } from './htmlmd';
 import {
-  HL_COLORS, HL_WIDTHS, PEN_COLORS, PEN_WIDTHS, hitStroke, inkLayer, loadInkPrefs, pathD, saveInkPrefs, simplify, strokePath,
-  type InkPrefs, type InkStroke, type InkTool,
+  HL_COLORS, HL_WIDTHS, PEN_COLORS, PEN_WIDTHS, StylusButtonLatch, hitStroke, inkLayer, isPenSideButtonRaw, isStylusEvent,
+  loadInkPrefs, pathD, saveInkPrefs, simplify, strokePath, type InkPrefs, type InkStroke, type InkTool,
 } from './ink';
 
 export interface EditorDeps {
@@ -118,10 +118,16 @@ export class PageEditor {
   private inkPrefs: InkPrefs = loadInkPrefs();
   private penSeen = false; // a stylus was used: fingers only scroll (palm rejection)
   private inkPtr: number | null = null;
+  private inkPtrStylus = false;
   private stroke: { s: InkStroke; path: SVGPathElement; page: HTMLElement; raf: number } | null = null;
-  private erasing: { page: number; removed: boolean } | null = null;
+  private erasing: { removed: boolean } | null = null;
   private pan: { id: number; y: number; x: number; vy: number; t: number } | null = null;
-  private hoverButton = false; // S Pen side button seen held while hovering (some pens only report it then)
+  private touchPtrs = new Set<number>();
+  private stylusBtn = new StylusButtonLatch(() => this.syncInkToolUI());
+  private eraserRing: HTMLElement | null = null;
+  private lastInkXY: [number, number] | null = null;
+  private lastSideEraseXY: { x: number; y: number; t: number } | null = null;
+  private blackoutEraseStart: { x: number; y: number; t: number } | null = null;
 
   constructor(private d: EditorDeps) {}
 
@@ -278,7 +284,7 @@ export class PageEditor {
       return;
     }
     const focused = this.hasFocus();
-    if (!this.pending && !focused) return;
+    if (!this.pending && (!focused || !this.doc.dirty || this.d.markdown() !== this.doc.mdBase)) return;
     const marked = focused && insertCaretMarkers(this.d.host);
     const html = this.extractHtml();
     if (html === null) {
@@ -293,11 +299,15 @@ export class PageEditor {
   /** Called by the renderer after the new pages are in place. */
   afterRender(): void {
     const host = this.d.host;
-    if (this.inkTool && !this.pagesView) this.inkTool = null; // pen tools only work on pages
+    if (this.inkTool && !this.pagesView) {
+      this.inkTool = null; // pen tools only work on pages
+      this.stylusBtn.reset();
+      this.hideEraserRing();
+    }
     if (this.enabled && !this.inkTool) host.setAttribute('contenteditable', 'true');
     else host.removeAttribute('contenteditable');
     host.classList.toggle('ink-mode', !!this.inkTool);
-    host.dataset.inkTool = this.inkTool ?? '';
+    host.dataset.inkTool = this.effectiveInkTool() ?? '';
     this.override = null;
     if (host.querySelector('[data-caret]')) restoreCaret(host, this.markers && this.hasFocus());
     removeCaretMarkers(host);
@@ -310,6 +320,9 @@ export class PageEditor {
   }
 
   onMarkdownChange(): void {
+    if (!this.doc.dirty && this.undoStack.length === 0 && this.current) {
+      this.current.md = this.d.markdown();
+    }
     this.updateBanner();
   }
 
@@ -379,7 +392,11 @@ export class PageEditor {
     const clean = stripCaretMarkers(html);
     this.pending = false;
     if (!this.doc.dirty || clean !== this.doc.html) {
-      if (!this.doc.dirty) this.doc.mdOrig = this.d.markdown();
+      if (!this.doc.dirty) {
+        const orig = this.d.markdown();
+        this.doc.mdOrig = orig;
+        if (!this.current.dirty) this.current.md = orig;
+      }
       this.doc.html = clean;
       this.doc.dirty = true;
       this.syncMarkdown();
@@ -395,7 +412,11 @@ export class PageEditor {
       const html = this.extractHtml();
       if (html !== null) {
         const clean = stripCaretMarkers(html);
-        if (!this.doc.dirty) this.doc.mdOrig = this.d.markdown();
+        if (!this.doc.dirty) {
+          const orig = this.d.markdown();
+          this.doc.mdOrig = orig;
+          if (!this.current.dirty) this.current.md = orig;
+        }
         this.doc.html = clean;
         this.doc.dirty = true;
         this.syncMarkdown();
@@ -509,13 +530,13 @@ export class PageEditor {
     this.sel = null;
     this.scheduleSave();
     this.updateBanner();
-    // Only restore the caret if the user is typing on the page; otherwise the
-    // caret marker would scroll the view to wherever the caret last was.
+    // Only restore the caret if the user is typing on the page; Undo/Redo must
+    // never jump the scroll position to wherever the caret was.
     if (s.dirty) {
       this.override = s.html;
       this.markers = s.html.includes('data-caret') && this.hasFocus();
     }
-    this.noScroll = !this.markers;
+    this.noScroll = true;
     this.d.rerender();
   }
 
@@ -525,21 +546,146 @@ export class PageEditor {
 
   private bindHost(): void {
     const host = this.d.host;
-    // Ink gets the pointer first (capture phase) so text editing and picture dragging never see it.
-    host.addEventListener('pointerdown', (e) => {
+    const scroller = this.d.scroller;
+
+    // Observe stylus button / hover / multi-touch across the window so S Pen side-button presses
+    // initiated while hovering (over the page, margin, or toolbar) are always tracked cleanly.
+    const onWinPtr = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') {
+        if (e.type === 'pointerdown') this.touchPtrs.add(e.pointerId);
+        else if (e.type === 'pointerup' || e.type === 'pointercancel') this.touchPtrs.delete(e.pointerId);
+        if (this.touchPtrs.size >= 2) this.abortSingleFingerForPinch();
+      }
+      if (isStylusEvent(e)) this.penSeen = true;
+      if (!this.inkTool || !this.pagesView) return;
+      const isMove = e.type === 'pointermove' || e.type === 'pointerrawupdate';
+      if (e.pointerType !== 'touch' || this.stylusBtn.held) {
+        if (isMove || e.type === 'pointerdown') {
+          this.lastInkXY = this.pageAt(e.clientX, e.clientY) ? [e.clientX, e.clientY] : null;
+        } else if (e.type === 'pointerout' && !(e.relatedTarget as Element | null)?.closest?.('.page')) {
+          this.lastInkXY = null;
+        }
+      }
+      this.stylusBtn.onPointer(e);
+      if (e.pointerType !== 'touch' || this.stylusBtn.held) {
+        if (this.effectiveInkTool() === 'eraser' && this.lastInkXY) this.showEraserRing(this.lastInkXY[0], this.lastInkXY[1]);
+        else if (!this.stylusBtn.held && this.effectiveInkTool() !== 'eraser') this.hideEraserRing();
+      }
+      if (isMove) this.inkMove(e);
+      else if (e.type === 'pointerup' || e.type === 'pointercancel') this.inkUp(e);
+    };
+    for (const ev of ['pointerdown', 'pointermove', 'pointerrawupdate', 'pointerup', 'pointercancel', 'pointerout'] as const) {
+      window.addEventListener(ev, onWinPtr as EventListener, { capture: true });
+    }
+    // Fallback for browsers on Android/One UI that emit legacy `mousemove` (without `pointermove`)
+    // when dragging the S Pen on glass with `BUTTON_STYLUS_PRIMARY` held.
+    window.addEventListener('mousemove', (e: MouseEvent) => {
+      if (!this.inkTool || !this.pagesView) return;
+      if (!this.stylusBtn.held && (e.buttons & (2 | 4 | 32)) === 0) return;
+      const page = this.pageAt(e.clientX, e.clientY);
+      this.lastInkXY = page ? [e.clientX, e.clientY] : null;
+      if (page && this.effectiveInkTool() === 'eraser') {
+        this.showEraserRing(e.clientX, e.clientY);
+        this.erasing ??= { removed: false };
+        this.eraseAt(page, e.clientX, e.clientY);
+      }
+    }, { capture: true });
+
+    // On Samsung One UI builds that tag S-Pen-button screen contact with proprietary action codes
+    // (211/213/212), Android's ViewGroup inside Chrome drops the touch move stream and fires a single
+    // `contextmenu` (at x:0, y:0) when the pen lifts, followed ~15ms later by `pointermove` at the lift XY.
+    // Record the pre-contact XY on `contextmenu` so the next `pointermove` sweeps the entire drag line.
+    window.addEventListener('contextmenu', () => {
+      if (!this.inkTool || !this.pagesView) return;
+      const now = performance.now();
+      if (this.lastSideEraseXY && now - this.lastSideEraseXY.t < 3500) {
+        this.blackoutEraseStart = { x: this.lastSideEraseXY.x, y: this.lastSideEraseXY.y, t: now };
+      } else if (this.lastInkXY && this.stylusBtn.held) {
+        this.blackoutEraseStart = { x: this.lastInkXY[0], y: this.lastInkXY[1], t: now };
+      }
+    }, { capture: true });
+    window.addEventListener('keydown', (e) => {
+      if (!this.inkTool || !this.pagesView) return;
+      if ((e.target as HTMLElement | null)?.closest?.('input, textarea, select')) return;
+      if (this.stylusBtn.onKey(e, true)) e.preventDefault();
+    }, { capture: true });
+    window.addEventListener('keyup', (e) => {
+      if (this.stylusBtn.onKey(e, false) && this.inkTool) e.preventDefault();
+    }, { capture: true });
+    window.addEventListener('blur', () => {
+      this.stylusBtn.reset();
+      this.touchPtrs.clear();
+      this.hideEraserRing();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.stylusBtn.reset();
+        this.touchPtrs.clear();
+        this.hideEraserRing();
+      }
+    });
+
+    // Ink gets the pointer first (capture phase on the preview scroller, including page margins)
+    // so text editing, browser right-click menus, native drag-and-drop, and picture dragging never steal it.
+    scroller.addEventListener('pointerdown', (e) => {
       if (this.inkTool && this.inkDown(e)) e.stopImmediatePropagation();
     }, { capture: true });
-    host.addEventListener('pointermove', (e) => {
-      if (e.pointerType === 'pen' && e.buttons === 0) this.hoverButton = false;
-      if (e.pointerType === 'pen' && (e.buttons & 2) && this.inkPtr === null) this.hoverButton = true;
-      if (this.inkPtr !== null || this.pan) this.inkMove(e);
-    });
-    host.addEventListener('pointerup', (e) => this.inkUp(e));
-    host.addEventListener('pointercancel', (e) => this.inkUp(e));
-    host.addEventListener('lostpointercapture', (e) => { if (e.pointerId === this.inkPtr) this.inkUp(e); });
-    // S Pen button + touch fires a context menu (right-click); never show it while drawing.
-    host.addEventListener('contextmenu', (e) => { if (this.inkTool || (e as PointerEvent).pointerType === 'pen') e.preventDefault(); });
-    host.addEventListener('touchmove', (e) => { if (this.inkTool && (this.inkPtr !== null || this.pan)) e.preventDefault(); }, { passive: false });
+    scroller.addEventListener('mousedown', (e) => {
+      if (this.inkTool && this.pagesView && this.inPreviewViewport(e.clientX, e.clientY)) e.preventDefault();
+    }, { capture: true });
+    scroller.addEventListener('dragstart', (e) => {
+      if (this.inkTool) e.preventDefault();
+    }, { capture: true });
+    scroller.addEventListener('selectstart', (e) => {
+      if (this.inkTool) e.preventDefault();
+    }, { capture: true });
+    scroller.addEventListener('lostpointercapture', (e) => { if (e.pointerId === this.inkPtr) this.inkUp(e); });
+    // S Pen button + touch fires contextmenu / auxclick (right-click); never show it while drawing.
+    scroller.addEventListener('contextmenu', (e) => {
+      if (this.inkTool || isStylusEvent(e as PointerEvent)) e.preventDefault();
+    }, { capture: true });
+    scroller.addEventListener('auxclick', (e) => {
+      if (this.inkTool || isStylusEvent(e as PointerEvent)) e.preventDefault();
+    }, { capture: true });
+    scroller.addEventListener('touchstart', (e) => {
+      if (!this.inkTool || !this.pagesView || e.touches.length !== 1) return;
+      if (this.stylusBtn.held) {
+        const t = e.touches[0];
+        const page = this.pageAt(t.clientX, t.clientY);
+        if (page) {
+          e.preventDefault();
+          this.lastInkXY = [t.clientX, t.clientY];
+          this.showEraserRing(t.clientX, t.clientY);
+          this.erasing ??= { removed: false };
+          this.eraseAt(page, t.clientX, t.clientY);
+        }
+      }
+    }, { capture: true, passive: false });
+    scroller.addEventListener('touchmove', (e) => {
+      if (!this.inkTool || !this.pagesView) return;
+      if (this.stylusBtn.held && e.touches.length === 1) {
+        e.preventDefault();
+        const t = e.touches[0];
+        const page = this.pageAt(t.clientX, t.clientY);
+        if (page) {
+          this.lastInkXY = [t.clientX, t.clientY];
+          this.showEraserRing(t.clientX, t.clientY);
+          this.erasing ??= { removed: false };
+          this.eraseAt(page, t.clientX, t.clientY);
+        }
+        return;
+      }
+      if (e.touches.length < 2 && (this.inkPtr !== null || this.pan)) e.preventDefault();
+    }, { capture: true, passive: false });
+    const onTouchEnd = () => {
+      if (this.erasing && this.inkPtr === null) {
+        const removed = this.erasing.removed;
+        this.erasing = null;
+        if (removed) this.commitInk();
+      }
+    };
+    scroller.addEventListener('touchend', onTouchEnd, { capture: true });
+    scroller.addEventListener('touchcancel', onTouchEnd, { capture: true });
     host.addEventListener('input', () => {
       if (!this.enabled) return;
       this.pending = true;
@@ -874,8 +1020,12 @@ export class PageEditor {
   }
 
   private block(tag: string): void {
+    const keepTop = this.d.scroller.scrollTop;
+    const keepLeft = this.d.scroller.scrollLeft;
     this.exec('formatBlock', tag === 'p' ? 'p' : tag);
-    this.noScroll = !this.hasFocus();
+    this.d.scroller.scrollTop = keepTop;
+    this.d.scroller.scrollLeft = keepLeft;
+    this.noScroll = true;
     this.d.rerender();
   }
 
@@ -892,6 +1042,8 @@ export class PageEditor {
   private resetEdits(): void {
     if (!confirm('Discard all page edits, pictures and pen drawings and show the Markdown render again?\n(You can still Undo this.)')) return;
     this.flushNow();
+    if (this.hasFocus()) (document.activeElement as HTMLElement | null)?.blur?.();
+    getSelection()?.removeAllRanges();
     const orig = this.doc.mdOrig;
     this.doc.dirty = false;
     this.doc.html = '';
@@ -902,6 +1054,7 @@ export class PageEditor {
     this.mdLossy = [];
     if (orig !== undefined && orig !== this.d.markdown()) this.d.setMarkdown(orig);
     this.sel = null;
+    this.noScroll = true;
     this.commitDoc();
     this.d.toast('Page edits discarded — Undo brings them back');
   }
@@ -922,7 +1075,7 @@ export class PageEditor {
         ${btn('toggle', 'Finish editing (lock the page)', `${svg(I.check)}<span>Done</span>`, 'ed-toggle on')}
         <i class="ed-sep"></i>
         ${btn('ink-pen', 'Pen — write and draw (S Pen button held = eraser)', svg(I.pen), 'ink')}
-        ${btn('ink-hl', 'Highlighter pen', svg(I.marker), 'ink')}
+        ${btn('ink-hl', 'Highlighter pen (S Pen button held = eraser)', svg(I.marker), 'ink')}
         ${btn('ink-eraser', 'Eraser — removes whole strokes', svg(I.eraser), 'ink')}
         ${btn('ink-opts', 'Pen colour and thickness', '<span class="ink-dot"></span>', 'ink-opts')}
         <i class="ed-sep"></i>
@@ -1095,7 +1248,8 @@ export class PageEditor {
     b.dataset.row = row;
     b.dataset.kind = this.sel?.kind ?? '';
     if (row === 'text') {
-      for (const t of ['pen', 'hl', 'eraser'] as const) b.querySelector(`[data-a="ink-${t}"]`)?.setAttribute('aria-pressed', String(this.inkTool === t));
+      const effInk = this.effectiveInkTool();
+      for (const t of ['pen', 'hl', 'eraser'] as const) b.querySelector(`[data-a="ink-${t}"]`)?.setAttribute('aria-pressed', String(effInk === t));
       const dot = b.querySelector<HTMLElement>('.ink-dot');
       if (dot) {
         const hl = this.inkTool === 'hl';
@@ -1133,6 +1287,12 @@ export class PageEditor {
   }
 
   private updateBanner(): void {
+    const noteEl = document.getElementById('md-sync-note');
+    if (noteEl) {
+      const note = this.lossyNote;
+      noteEl.textContent = note;
+      noteEl.hidden = !note;
+    }
     const b = this.d.banner;
     const md = this.d.markdown();
     const diverged = this.doc.dirty && !md.startsWith(this.doc.mdBase);
@@ -1149,6 +1309,10 @@ export class PageEditor {
       const a = (e.target as HTMLElement).closest<HTMLElement>('[data-b]')?.dataset.b;
       if (!a) return;
       this.flushNow();
+      if (a === 'usemd' || a === 'append') {
+        if (this.hasFocus()) (document.activeElement as HTMLElement | null)?.blur?.();
+        getSelection()?.removeAllRanges();
+      }
       const mdNow = this.d.markdown();
       if (a === 'append') {
         this.doc.html += safeMd(mdNow);
@@ -1159,6 +1323,7 @@ export class PageEditor {
         this.doc.mdBase = mdNow;
         this.mdLossy = htmlToMarkdown(this.doc.html).lossy;
       } else this.syncMarkdown();
+      this.noScroll = true;
       this.commitDoc();
       this.updateBanner();
       if (a === 'usemd') this.d.toast('Page rebuilt from the Markdown — Undo brings the old page back');
@@ -1179,7 +1344,13 @@ export class PageEditor {
       this.d.toast('Pen tools work in Pages view');
       t = null;
     }
-    if (t === this.inkTool) return;
+    this.stylusBtn.reset();
+    this.hideEraserRing();
+    if (t === this.inkTool) {
+      this.syncInkToolUI();
+      return;
+    }
+    if (this.inkPtr !== null) this.endInkContact(this.inkPtr);
     this.inkTool = t;
     if (t) {
       this.flushNow();
@@ -1189,11 +1360,79 @@ export class PageEditor {
     }
     const host = this.d.host;
     host.classList.toggle('ink-mode', !!t);
-    host.dataset.inkTool = t ?? '';
+    host.dataset.inkTool = this.effectiveInkTool() ?? '';
     if (this.enabled && !t) host.setAttribute('contenteditable', 'true');
     else host.removeAttribute('contenteditable');
     this.updateBar();
     void rerender;
+  }
+
+  /** Active ink tool after applying temporary S Pen side-button hold override. */
+  private effectiveInkTool(): InkTool | null {
+    if (!this.inkTool) return null;
+    if (this.inkTool !== 'eraser' && this.stylusBtn.held) return 'eraser';
+    return this.inkTool;
+  }
+
+  /** Fast UI sync when the S Pen side button is pressed or released. */
+  private syncInkToolUI(): void {
+    const eff = this.effectiveInkTool();
+    this.d.host.dataset.inkTool = eff ?? '';
+    if (this.d.bar.dataset.row === 'text') {
+      for (const t of ['pen', 'hl', 'eraser'] as const) {
+        this.d.bar.querySelector(`[data-a="ink-${t}"]`)?.setAttribute('aria-pressed', String(eff === t));
+      }
+    }
+    if (eff === 'eraser' && this.lastInkXY) this.showEraserRing(this.lastInkXY[0], this.lastInkXY[1]);
+    else this.hideEraserRing();
+  }
+
+  private eraserRadiusMm(): number {
+    return 3 / Math.max(0.3, this.d.zoom());
+  }
+
+  private showEraserRing(x: number, y: number): void {
+    let ring = this.eraserRing;
+    if (!ring) {
+      ring = document.createElement('div');
+      ring.className = 'ink-eraser-ring';
+      ring.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(ring);
+      this.eraserRing = ring;
+    }
+    const px = Math.max(12, Math.round(this.eraserRadiusMm() * 2 * MM_PX * this.d.zoom()));
+    ring.style.width = `${px}px`;
+    ring.style.height = `${px}px`;
+    ring.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+    ring.style.display = 'block';
+  }
+
+  private hideEraserRing(): void {
+    if (this.eraserRing) this.eraserRing.style.display = 'none';
+  }
+
+  private inPreviewViewport(x: number, y: number): boolean {
+    const sr = this.d.scroller.getBoundingClientRect();
+    return x >= sr.left && y >= sr.top && x < sr.left + this.d.scroller.clientWidth && y < sr.top + this.d.scroller.clientHeight;
+  }
+
+  /** Cancels single-finger pan (or tiny accidental finger dot) when a second finger lands to pinch-zoom. */
+  private abortSingleFingerForPinch(): void {
+    this.pan = null;
+    if (this.inkPtr !== null && !this.inkPtrStylus) {
+      const st = this.stroke;
+      if (st && st.s.pts.length <= 8) {
+        cancelAnimationFrame(st.raf);
+        st.path.remove();
+        this.stroke = null;
+        try { this.d.scroller.releasePointerCapture(this.inkPtr); } catch { /* ignore */ }
+        this.inkPtr = null;
+      } else if (this.erasing && !this.erasing.removed) {
+        this.erasing = null;
+        try { this.d.scroller.releasePointerCapture(this.inkPtr); } catch { /* ignore */ }
+        this.inkPtr = null;
+      }
+    }
   }
 
   private inkOptions(anchor: HTMLElement): void {
@@ -1273,32 +1512,14 @@ export class PageEditor {
 
   /** Which tool a pointer should use: the S Pen side button (or a pen eraser tip) erases while held. */
   private toolFor(e: PointerEvent): InkTool {
-    if (e.pointerType === 'pen' && ((e.buttons & 32) || (e.buttons & 2) || e.button === 5 || e.button === 2 || this.hoverButton)) return 'eraser';
+    if (this.inkTool === 'eraser' || this.stylusBtn.heldFor(e)) return 'eraser';
     return this.inkTool ?? 'pen';
   }
 
-  /** Called from pointerdown (capture) on the host. Returns true when the event was taken. */
-  private inkDown(e: PointerEvent): boolean {
-    if (!this.inkTool || !this.pagesView) return false;
-    if (e.pointerType === 'pen') this.penSeen = true;
-    const finger = e.pointerType === 'touch';
-    if (finger && (this.penSeen || !this.inkPrefs.fingerDraws)) return this.panDown(e);
-    if (this.inkPtr !== null) return true;
-    const page = this.pageAt(e.clientX, e.clientY);
-    if (!page) return false;
-    e.preventDefault();
-    e.stopPropagation();
-    this.inkPtr = e.pointerId;
-    try { this.d.host.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    const pageIdx = Number(page.dataset.page ?? '0');
-    const tool = this.toolFor(e);
-    if (tool === 'eraser') {
-      this.erasing = { page: pageIdx, removed: false };
-      this.eraseAt(page, e.clientX, e.clientY);
-      return true;
-    }
+  private beginStrokeAt(page: HTMLElement, clientX: number, clientY: number, tool: 'pen' | 'hl'): void {
     const p = this.inkPrefs;
-    const [x, y] = this.pagePoint(page, e.clientX, e.clientY);
+    const pageIdx = Number(page.dataset.page ?? '0');
+    const [x, y] = this.pagePoint(page, clientX, clientY);
     const s: InkStroke = {
       id: uid('k'), page: pageIdx, tool,
       color: tool === 'hl' ? p.hlColor : p.penColor,
@@ -1310,25 +1531,173 @@ export class PageEditor {
     const path = strokePath(s);
     g?.appendChild(path);
     this.stroke = { s, path, page, raf: 0 };
+  }
+
+  /** Called from pointerdown (capture) on the preview scroller. Returns true when taken. */
+  private inkDown(e: PointerEvent): boolean {
+    if (!this.inkTool || !this.pagesView) return false;
+    if (!this.inPreviewViewport(e.clientX, e.clientY)) return false;
+    this.stylusBtn.onPointer(e);
+
+    const stylus = isStylusEvent(e);
+    if (stylus) {
+      this.penSeen = true;
+      this.pan = null; // a landing stylus immediately halts any resting-palm pan
+    }
+
+    // Hovering in the air (`pressure === 0` on a pen): only act if the S Pen side button is actively held.
+    if (stylus && e.pressure === 0 && !isPenSideButtonRaw(e)) return false;
+
+    const finger = e.pointerType === 'touch';
+    if (finger) {
+      // Palm rejection: ignore palm/finger touches completely while a stylus gesture is active.
+      if (this.inkPtr !== null && this.inkPtrStylus) {
+        e.preventDefault();
+        return true;
+      }
+      if (this.touchPtrs.size >= 2) {
+        this.pan = null;
+        return false; // let 2-finger pinch zoom handle it
+      }
+      if (this.penSeen || !this.inkPrefs.fingerDraws) return this.panDown(e);
+    }
+
+    if (this.inkPtr !== null) {
+      if (stylus) {
+        // If `inkPtr` was already set (e.g. from hovering in the air with the S Pen button held,
+        // and now `pointerdown` fired as the pen touched the screen with the SAME or a new pointerId),
+        // we MUST still call `e.preventDefault()` below so the browser never hijacks the screen contact!
+        if (e.pointerId !== this.inkPtr) {
+          const keepBtn = this.stylusBtn.held;
+          this.endInkContact(this.inkPtr, keepBtn);
+        }
+      } else {
+        e.preventDefault();
+        return true;
+      }
+    }
+
+    const tool = this.toolFor(e);
+    const page = this.pageAt(e.clientX, e.clientY);
+    if (!page && tool !== 'eraser') return false;
+
+    e.preventDefault();
+    e.stopPropagation();
+    this.inkPtr = e.pointerId;
+    this.inkPtrStylus = stylus;
+    if (!stylus) {
+      try { this.d.scroller.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    }
+    this.syncInkToolUI();
+
+    if (tool === 'eraser') {
+      if (this.stroke) this.finishStroke();
+      this.erasing ??= { removed: false };
+      if (page) {
+        this.showEraserRing(e.clientX, e.clientY);
+        this.eraseAt(page, e.clientX, e.clientY);
+        if (stylus && this.stylusBtn.heldFor(e)) {
+          this.lastSideEraseXY = { x: e.clientX, y: e.clientY, t: performance.now() };
+        }
+      }
+      return true;
+    }
+    if (!this.stroke) this.beginStrokeAt(page!, e.clientX, e.clientY, tool);
     return true;
   }
 
   private inkMove(e: PointerEvent): void {
-    if (this.pan && e.pointerId === this.pan.id) return this.panMove(e);
-    if (e.pointerId !== this.inkPtr) return;
-    e.preventDefault();
-    // A stylus that starts holding the side button mid-stroke switches to erasing.
-    if (this.stroke && this.toolFor(e) === 'eraser') {
-      this.finishStroke();
-      const page = this.pageAt(e.clientX, e.clientY);
-      this.erasing = { page: Number(page?.dataset.page ?? '0'), removed: false };
+    if (!this.inkTool || !this.pagesView) return;
+
+    // If Samsung One UI swallowed a button-held screen drag (`action = 211/213/212`) and emitted
+    // `contextmenu` on lift, the very first `pointermove` after lift lands here with the lift XY:
+    // sweep-erase the entire line between the touchdown XY and the lift XY!
+    if (this.blackoutEraseStart && isStylusEvent(e)) {
+      const start = this.blackoutEraseStart;
+      this.blackoutEraseStart = null;
+      if (performance.now() - start.t < 2500 && this.inPreviewViewport(e.clientX, e.clientY)) {
+        this.erasing ??= { removed: false };
+        this.eraseSegment(start.x, start.y, e.clientX, e.clientY);
+        if (this.pageAt(e.clientX, e.clientY)) this.showEraserRing(e.clientX, e.clientY);
+        if (e.pressure === 0 && !isPenSideButtonRaw(e)) {
+          const removed = this.erasing.removed;
+          this.erasing = null;
+          this.lastSideEraseXY = null;
+          if (removed) this.commitInk();
+          this.endInkContact(e.pointerId, false);
+          this.hideEraserRing();
+          this.syncInkToolUI();
+          return;
+        }
+      }
     }
+
+    // Start erasing/drawing on `pointermove` when physical screen contact (`pressure > 0`) or
+    // S Pen side-button hover (`isPenSideButtonRaw(e)`) begins without a separate `pointerdown`.
+    if (this.inkPtr === null && isStylusEvent(e) && (e.pressure > 0 || isPenSideButtonRaw(e))) {
+      if (this.inPreviewViewport(e.clientX, e.clientY)) this.inkDown(e);
+      return;
+    }
+
+    if (this.pan && e.pointerId === this.pan.id) {
+      if (this.touchPtrs.size >= 2) { this.pan = null; return; }
+      return this.panMove(e);
+    }
+    if (e.pointerId !== this.inkPtr) {
+      // Seamless handoff if Android switches stylus `pointerId` across contact segments.
+      if (this.inkPtr !== null && isStylusEvent(e) && (e.pressure > 0 || isPenSideButtonRaw(e))) {
+        this.inkPtr = e.pointerId;
+        this.inkPtrStylus = true;
+      } else {
+        return;
+      }
+    }
+
+    // When the S Pen is in the air (`pressure === 0`) without the side button held, end the active stroke/erase.
+    if (this.inkPtrStylus && e.pressure === 0 && !isPenSideButtonRaw(e)) {
+      this.lastSideEraseXY = null;
+      this.endInkContact(e.pointerId, false);
+      this.hideEraserRing();
+      this.syncInkToolUI();
+      return;
+    }
+
+    e.preventDefault();
+    const tool = this.toolFor(e);
+    this.syncInkToolUI();
+
+    // Holding the S Pen side button mid-stroke switches from drawing to erasing.
+    if (this.stroke && tool === 'eraser') {
+      this.finishStroke();
+      this.erasing = { removed: false };
+    }
+    // Releasing the S Pen side button mid-stroke switches immediately back to Pen or Highlighter.
+    if (this.erasing && tool !== 'eraser') {
+      const removed = this.erasing.removed;
+      this.erasing = null;
+      this.lastSideEraseXY = null;
+      this.hideEraserRing();
+      if (removed) this.commitInk();
+      const page = this.pageAt(e.clientX, e.clientY);
+      if (page && e.pressure > 0) this.beginStrokeAt(page, e.clientX, e.clientY, tool);
+    }
+
     if (this.erasing) {
+      const now = performance.now();
       const events = (e.getCoalescedEvents?.() ?? []).length ? e.getCoalescedEvents() : [e];
       for (const ev of events) {
-        const page = this.pageAt(ev.clientX, ev.clientY);
-        if (page) this.eraseAt(page, ev.clientX, ev.clientY);
+        if (this.lastSideEraseXY && now - this.lastSideEraseXY.t < 400) {
+          this.eraseSegment(this.lastSideEraseXY.x, this.lastSideEraseXY.y, ev.clientX, ev.clientY);
+        } else {
+          const page = this.pageAt(ev.clientX, ev.clientY);
+          if (page) this.eraseAt(page, ev.clientX, ev.clientY);
+        }
+        if (isStylusEvent(e) && this.stylusBtn.heldFor(e)) {
+          this.lastSideEraseXY = { x: ev.clientX, y: ev.clientY, t: now };
+        }
       }
+      if (this.pageAt(e.clientX, e.clientY)) this.showEraserRing(e.clientX, e.clientY);
+      else this.hideEraserRing();
       return;
     }
     const st = this.stroke;
@@ -1336,7 +1705,9 @@ export class PageEditor {
     const events = (e.getCoalescedEvents?.() ?? []).length ? e.getCoalescedEvents() : [e];
     for (const ev of events) {
       const [x, y] = this.pagePoint(st.page, ev.clientX, ev.clientY);
-      st.s.pts.push(x, y);
+      const pts = st.s.pts;
+      if (pts.length >= 2 && pts[pts.length - 2] === x && pts[pts.length - 1] === y) continue;
+      pts.push(x, y);
     }
     if (!st.raf) {
       st.raf = requestAnimationFrame(() => {
@@ -1346,11 +1717,11 @@ export class PageEditor {
     }
   }
 
-  private inkUp(e: PointerEvent): void {
-    if (this.pan && e.pointerId === this.pan.id) return this.panUp();
-    if (e.pointerId !== this.inkPtr) return;
-    try { this.d.host.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  private endInkContact(ptrId: number, keepHoverBtn = false): void {
+    try { this.d.scroller.releasePointerCapture(ptrId); } catch { /* ignore */ }
     this.inkPtr = null;
+    this.inkPtrStylus = false;
+    this.stylusBtn.endContact(keepHoverBtn);
     if (this.erasing) {
       const removed = this.erasing.removed;
       this.erasing = null;
@@ -1358,6 +1729,14 @@ export class PageEditor {
       return;
     }
     this.finishStroke();
+  }
+
+  private inkUp(e: PointerEvent): void {
+    if (this.pan && e.pointerId === this.pan.id) return this.panUp();
+    if (e.pointerId !== this.inkPtr) return;
+    const stillHoverBtn = isStylusEvent(e) && (e.buttons & (2 | 4 | 32)) !== 0;
+    this.endInkContact(e.pointerId, stillHoverBtn);
+    this.syncInkToolUI();
   }
 
   private finishStroke(): void {
@@ -1371,10 +1750,23 @@ export class PageEditor {
     this.commitInk();
   }
 
+  /** Sweeps `eraseAt` every ~6px along the line from `(x0, y0)` to `(x1, y1)` so fast moves or One UI 211/213/212 blackouts never skip strokes. */
+  private eraseSegment(x0: number, y0: number, x1: number, y1: number): void {
+    const dist = Math.hypot(x1 - x0, y1 - y0);
+    const steps = Math.min(80, Math.max(1, Math.ceil(dist / 6)));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const sx = x0 + (x1 - x0) * t;
+      const sy = y0 + (y1 - y0) * t;
+      const page = this.pageAt(sx, sy);
+      if (page) this.eraseAt(page, sx, sy);
+    }
+  }
+
   private eraseAt(page: HTMLElement, x: number, y: number): void {
     const [mx, my] = this.pagePoint(page, x, y);
     const idx = Number(page.dataset.page ?? '0');
-    const r = 2.5 / Math.max(0.3, this.d.zoom()); // ~2.5 mm at 100 %
+    const r = this.eraserRadiusMm();
     const ink = this.doc.ink ?? [];
     const keep: InkStroke[] = [];
     for (const s of ink) {
@@ -1403,7 +1795,7 @@ export class PageEditor {
   private panDown(e: PointerEvent): boolean {
     if (this.pan) return true;
     this.pan = { id: e.pointerId, y: e.clientY, x: e.clientX, vy: 0, t: performance.now() };
-    try { this.d.host.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    try { this.d.scroller.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     return true;
   }
 

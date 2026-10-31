@@ -1155,7 +1155,7 @@ async function importSessionFromText(text: string): Promise<void> {
     const cur = await flushCurrentSession();
     const rec = await importSessionJson(text);
     // Keep the current non-empty session separate if the imported file had the same ID.
-    const curHasWork = !!(cur.markdown.trim() || cur.doc.dirty || cur.doc.floats.length);
+    const curHasWork = !!(cur.markdown.trim() || cur.doc.dirty || cur.doc.floats.length || (cur.doc.ink?.length ?? 0) > 0);
     if (rec.id === cur.id && curHasWork) {
       rec.id = newSessionId();
       await saveSessionRecord(rec);

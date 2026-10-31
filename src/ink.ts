@@ -127,3 +127,274 @@ export function simplify(pts: number[], min = 0.15): number[] {
   out.push(pts[pts.length - 2], pts[pts.length - 1]);
   return out.map((v) => Math.round(v * 100) / 100);
 }
+
+/* ------------------------------------------------------------------ */
+/* Stylus side-button latch (modelled on xnotes StylusButtons.kt)      */
+/* ------------------------------------------------------------------ */
+
+/** Barrel (2), secondary/middle barrel (4), and eraser tip/tail (32) button bits. */
+export const STYLUS_BTN_MASK = 2 | 4 | 32;
+
+export function isStylusEvent(e: { pointerType?: string }): boolean {
+  return e.pointerType === 'pen' || e.pointerType === 'eraser';
+}
+
+export function isSideButtonCode(button: number): boolean {
+  return button === 2 || button === 5 || button === 1;
+}
+
+/**
+ * True when a pointer event carries a stylus side-button signal (either via standard barrel/eraser
+ * button bits 2/4/32, or on Samsung Galaxy Tab S9 where holding the S Pen button in the air fires
+ * `pointerdown` / `pointermove` with `pressure === 0` and `buttons !== 0`).
+ */
+export function isPenSideButtonRaw(e: PointerEvent): boolean {
+  if (e.pointerType === 'eraser') return true;
+  if (isStylusEvent(e)) {
+    if ((e.buttons & STYLUS_BTN_MASK) !== 0) return true;
+    if (e.type === 'pointerdown' && isSideButtonCode(e.button)) return true;
+    // Physical S Pen tip contact on the screen always has `pressure > 0`. In the air (`pressure === 0`),
+    // `buttons !== 0` (or `pointerdown`) only occurs when the S Pen side button is pressed.
+    if (
+      e.pressure === 0 &&
+      (e.buttons !== 0 || e.type === 'pointerdown') &&
+      e.type !== 'pointerup' &&
+      e.type !== 'pointercancel' &&
+      e.type !== 'pointerout' &&
+      e.type !== 'pointerleave'
+    ) {
+      return true;
+    }
+  }
+  if (e.pointerType === 'mouse') {
+    return (e.buttons & (2 | 32)) !== 0 || (e.type === 'pointerdown' && (e.button === 2 || e.button === 5));
+  }
+  return false;
+}
+
+export function isStylusHoverOnly(e: PointerEvent): boolean {
+  return isStylusEvent(e) && e.pressure === 0 && e.buttons === 0;
+}
+
+export function isStylusButtonKey(e: KeyboardEvent): boolean {
+  const k = e.key || '';
+  const c = e.code || '';
+  return k === 'F21' || c === 'F21' || /^StylusButton/i.test(k) || /^StylusButton/i.test(c);
+}
+
+/**
+ * Tracks whether the stylus side button (or mouse right-button override) is currently held across
+ * all browser delivery routes on Android / Samsung Galaxy Tab S9 (Chrome & Samsung Internet),
+ * both while hovering in the air (`pressure === 0`) and while touching the screen (`pressure > 0`).
+ */
+export class StylusButtonLatch {
+  private motionHeld = false;
+  private keyHeld = false;
+  private airLatched = false; // button press began in the air (`pressure === 0`)
+  private hoverGraceUntil = 0; // bridges the hover-exit -> screen-touch transition gap
+  private contactLatched = false; // keeps button latched when transitioning from air hold to screen touch
+  private contactSawBit = false; // true once screen contact reported explicit bit 2/4/32
+  private inContact = false;
+  private zeroMoveCount = 0;
+  private releaseTimer = 0;
+  private lastEv: Event | null = null;
+
+  constructor(private onChange?: () => void) {}
+
+  /** Whether the side button is currently held (for toolbar highlight & tool override). */
+  get held(): boolean {
+    return this.motionHeld || this.keyHeld || this.airLatched || this.contactLatched || performance.now() < this.hoverGraceUntil;
+  }
+
+  private notify(prev: boolean): void {
+    if (this.held !== prev) this.onChange?.();
+  }
+
+  private armReleaseTimer(ms: number): void {
+    clearTimeout(this.releaseTimer);
+    this.releaseTimer = window.setTimeout(() => {
+      this.releaseTimer = 0;
+      if (!this.contactLatched) {
+        this.motionHeld = false;
+        this.airLatched = false;
+      }
+      this.hoverGraceUntil = 0;
+      this.onChange?.();
+    }, ms);
+  }
+
+  /** Observe any window-level pointer event (in the air or on the screen) to keep button state fresh. */
+  onPointer(e: PointerEvent): void {
+    if (e === this.lastEv) return;
+    this.lastEv = e;
+    const stylus = isStylusEvent(e);
+    if (!stylus && e.pointerType !== 'mouse') return;
+
+    const prev = this.held;
+    const now = performance.now();
+    const explicitBit =
+      e.pointerType === 'eraser' ||
+      (stylus && ((e.buttons & STYLUS_BTN_MASK) !== 0 || (e.type === 'pointerdown' && isSideButtonCode(e.button)))) ||
+      (e.pointerType === 'mouse' && ((e.buttons & (2 | 32)) !== 0 || (e.type === 'pointerdown' && (e.button === 2 || e.button === 5))));
+    const rawBtn = explicitBit || isPenSideButtonRaw(e);
+
+    // 1. Stylus in the air (`pressure === 0`):
+    if (stylus && e.pressure === 0) {
+      if (rawBtn && e.type !== 'pointerup' && e.type !== 'pointercancel' && e.type !== 'pointerout' && e.type !== 'pointerleave') {
+        clearTimeout(this.releaseTimer);
+        this.releaseTimer = 0;
+        this.zeroMoveCount = 0;
+        this.motionHeld = true;
+        this.airLatched = true;
+        this.hoverGraceUntil = now + 220;
+      } else if (e.type === 'pointermove' && e.buttons === 0) {
+        // Button released while hovering in the air: bridge 1-3 transitional hover frames right
+        // before screen contact, then clear once genuinely hovering idle.
+        this.zeroMoveCount++;
+        if (this.zeroMoveCount >= 4 || !this.airLatched) {
+          clearTimeout(this.releaseTimer);
+          this.releaseTimer = 0;
+          this.motionHeld = false;
+          this.airLatched = false;
+          this.contactLatched = false;
+          this.inContact = false;
+          this.hoverGraceUntil = 0;
+        } else if (this.motionHeld || this.airLatched) {
+          this.motionHeld = false;
+          this.hoverGraceUntil = Math.min(this.hoverGraceUntil || now + 90, now + 90);
+          this.armReleaseTimer(95);
+        }
+      } else if (e.type === 'pointerup' || e.type === 'pointercancel') {
+        if (this.inContact) {
+          // Physical screen contact lifted OR Samsung One UI split a button-held screen drag into
+          // 200ms segments (`id: 96 b:5 bs:32` -> 33ms gap -> `id: 97 b:0 bs:1 pr:0.25` -> ...).
+          // If this contact was erasing via the side button, keep a 95ms bridge so the next segment
+          // (arriving ~20-46ms later with `pressure > 0`) continues erasing seamlessly, while a real
+          // lift (followed by idle hover `buttons === 0, pressure === 0`) clears immediately!
+          const wasErasingContact = this.contactLatched || this.motionHeld || this.airLatched;
+          this.inContact = false;
+          this.contactLatched = false;
+          this.contactSawBit = false;
+          this.airLatched = false;
+          this.motionHeld = (e.buttons & STYLUS_BTN_MASK) !== 0;
+          if (wasErasingContact && !this.motionHeld) {
+            this.hoverGraceUntil = now + 95;
+            this.armReleaseTimer(100);
+          } else {
+            clearTimeout(this.releaseTimer);
+            this.releaseTimer = 0;
+            this.hoverGraceUntil = 0;
+          }
+        } else if (this.motionHeld || this.airLatched || now < this.hoverGraceUntil) {
+          // Air stream ended (either user released button in air, or pen is touching down onto glass):
+          // keep a brief 180ms bridge so if the pen is touching down onto the screen, screen contact latches it!
+          this.motionHeld = false;
+          this.hoverGraceUntil = now + 180;
+          this.armReleaseTimer(185);
+        }
+      }
+      this.notify(prev);
+      return;
+    }
+
+    // 2. Active screen contact (`pressure > 0` on stylus, or mouse):
+    this.zeroMoveCount = 0;
+    if (e.type === 'pointerup' || e.type === 'pointercancel') {
+      const wasErasingContact = stylus && (this.contactLatched || this.motionHeld || this.airLatched);
+      this.inContact = false;
+      this.contactLatched = false;
+      this.contactSawBit = false;
+      this.airLatched = false;
+      this.motionHeld = stylus && (e.buttons & STYLUS_BTN_MASK) !== 0;
+      if (wasErasingContact && !this.motionHeld) {
+        this.hoverGraceUntil = now + 95;
+        this.armReleaseTimer(100);
+      } else {
+        clearTimeout(this.releaseTimer);
+        this.releaseTimer = 0;
+        this.hoverGraceUntil = 0;
+      }
+      this.notify(prev);
+      return;
+    }
+
+    if (e.type === 'pointerdown' || e.type === 'pointermove' || e.type === 'pointerrawupdate') {
+      const wasInContact = this.inContact;
+      this.inContact = true;
+      if (explicitBit) {
+        clearTimeout(this.releaseTimer);
+        this.releaseTimer = 0;
+        this.motionHeld = true;
+        // If the button was already held when screen contact began (either via `pointerdown`
+        // button=2/buttons=2 or carried in from air hover), latch it for the entire screen drag
+        // because Android Chrome's `ACTION_MOVE` often reports `buttons === 1` (`button === -1`)
+        // on subsequent move frames even while the barrel button remains physically held!
+        if (!wasInContact || e.type === 'pointerdown' || this.airLatched || this.contactLatched) {
+          this.contactLatched = true;
+          this.contactSawBit = false;
+        } else {
+          this.contactSawBit = true;
+        }
+        this.hoverGraceUntil = 0;
+      } else if (!wasInContact && stylus && (this.airLatched || this.motionHeld || now < this.hoverGraceUntil)) {
+        // Pen was holding the button in the air and just touched the screen!
+        // Latch Eraser for this screen contact even if the touch stream reports `buttons === 1`.
+        clearTimeout(this.releaseTimer);
+        this.releaseTimer = 0;
+        this.contactLatched = true;
+        this.contactSawBit = false;
+        this.motionHeld = false;
+        this.hoverGraceUntil = 0;
+      } else if ((this.contactSawBit && !this.contactLatched) || e.pointerType === 'mouse') {
+        // Mid-stroke chorded button press was released:
+        this.motionHeld = false;
+        this.contactLatched = false;
+        this.airLatched = false;
+      }
+    }
+    this.notify(prev);
+  }
+
+  /** Whether this pointer event should act as the eraser via the side button. */
+  heldFor(e: PointerEvent): boolean {
+    if (isPenSideButtonRaw(e)) return true;
+    if (isStylusEvent(e)) return this.held;
+    return false;
+  }
+
+  onKey(e: KeyboardEvent, down: boolean): boolean {
+    if (!isStylusButtonKey(e)) return false;
+    const prev = this.held;
+    this.keyHeld = down;
+    this.notify(prev);
+    return true;
+  }
+
+  endContact(keepMotion = false): void {
+    const prev = this.held;
+    this.inContact = false;
+    this.contactLatched = false;
+    this.contactSawBit = false;
+    if (!keepMotion && !this.releaseTimer) {
+      this.airLatched = false;
+      this.hoverGraceUntil = 0;
+      this.motionHeld = false;
+    }
+    this.notify(prev);
+  }
+
+  reset(): void {
+    clearTimeout(this.releaseTimer);
+    this.releaseTimer = 0;
+    const prev = this.held;
+    this.inContact = false;
+    this.motionHeld = false;
+    this.keyHeld = false;
+    this.airLatched = false;
+    this.hoverGraceUntil = 0;
+    this.contactLatched = false;
+    this.contactSawBit = false;
+    this.zeroMoveCount = 0;
+    this.notify(prev);
+  }
+}
